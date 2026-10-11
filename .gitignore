@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+build/
+dist/
+.pytest_cache/
+.ruff_cache/
+# Models are downloaded or supplied by the user, never committed.
+*.onnx
+*.pth
+*.bin
+*.index
+models/

@@ -1,0 +1,129 @@
+"""Small signal-processing helpers used by the voice changer and TTS paths."""
+
+from __future__ import annotations
+
+from math import gcd
+
+import numpy as np
+from scipy.signal import resample_poly
+
+# RVC's coarse pitch quantisation range (see RVC's pipeline: f0_min / f0_max).
+F0_MIN = 50.0
+F0_MAX = 1100.0
+_MEL_MIN = 1127.0 * np.log(1.0 + F0_MIN / 700.0)
+_MEL_MAX = 1127.0 * np.log(1.0 + F0_MAX / 700.0)
+
+
+def to_mono(x: np.ndarray) -> np.ndarray:
+    x = np.asarray(x, dtype=np.float32)
+    return x.mean(axis=1) if x.ndim == 2 else x
+
+
+def resample(x: np.ndarray, sr_from: int, sr_to: int) -> np.ndarray:
+    x = np.asarray(x, dtype=np.float32)
+    if sr_from == sr_to or x.size == 0:
+        return x
+    g = gcd(int(sr_from), int(sr_to))
+    return resample_poly(x, sr_to // g, sr_from // g).astype(np.float32)
+
+
+def fit_length(x: np.ndarray, n: int) -> np.ndarray:
+    """Trim or zero-pad the end of ``x`` to exactly ``n`` samples."""
+    if len(x) >= n:
+        return x[:n]
+    return np.concatenate([x, np.zeros(n - len(x), dtype=x.dtype)])
+
+
+def rms_db(x: np.ndarray) -> float:
+    if x.size == 0:
+        return -120.0
+    rms = float(np.sqrt(np.mean(np.square(x, dtype=np.float64))))
+    return 20.0 * np.log10(max(rms, 1e-6))
+
+
+def crossfade(prev_tail: np.ndarray, head: np.ndarray) -> np.ndarray:
+    """Equal-power crossfade from ``prev_tail`` into ``head`` (same length)."""
+    n = len(head)
+    if n == 0:
+        return head
+    t = np.linspace(0.0, np.pi / 2, n, dtype=np.float32)
+    return prev_tail * np.cos(t) ** 2 + head * np.sin(t) ** 2
+
+
+def f0_to_coarse(f0: np.ndarray) -> np.ndarray:
+    """Quantise f0 (Hz, 0 = unvoiced) to RVC's 1..255 coarse pitch bins."""
+    f0 = np.asarray(f0, dtype=np.float64)
+    mel = 1127.0 * np.log(1.0 + f0 / 700.0)
+    voiced = mel > 0
+    mel[voiced] = (mel[voiced] - _MEL_MIN) * 254.0 / (_MEL_MAX - _MEL_MIN) + 1.0
+    mel[mel <= 1] = 1
+    mel[mel > 255] = 255
+    return np.rint(mel).astype(np.int64)
+
+
+def estimate_f0(
+    x: np.ndarray,
+    sr: int = 16000,
+    hop: int = 160,
+    window: int = 1024,
+    fmin: float = F0_MIN,
+    fmax: float = F0_MAX,
+    threshold: float = 0.15,
+    silence_db: float = -60.0,
+) -> np.ndarray:
+    """YIN pitch estimate, one value per ``hop`` samples (0 where unvoiced).
+
+    Returns ``len(x) // hop + 1`` frames, matching RVC's framing at 10 ms hops.
+    Used when no RMVPE model is configured.
+    """
+    x = np.asarray(x, dtype=np.float32)
+    n_frames = len(x) // hop + 1
+    half = window // 2
+    padded = np.pad(x, (half, half + window))
+    starts = np.arange(n_frames) * hop
+    frames = np.lib.stride_tricks.sliding_window_view(padded, window)[starts]
+
+    tau_min = max(2, int(sr / fmax))
+    tau_max = min(half - 1, int(sr / fmin))
+
+    # Difference function d(tau) = sum_{j<half} (x_j - x_{j+tau})^2 via FFT.
+    nfft = 1 << int(np.ceil(np.log2(2 * window)))
+    spec_full = np.fft.rfft(frames, nfft, axis=1)
+    spec_head = np.fft.rfft(frames[:, :half], nfft, axis=1)
+    cross = np.fft.irfft(np.conj(spec_head) * spec_full, nfft, axis=1)[:, : half + 1]
+    sq = np.square(frames, dtype=np.float64)
+    csum = np.concatenate([np.zeros((n_frames, 1)), np.cumsum(sq, axis=1)], axis=1)
+    taus = np.arange(half + 1)
+    energy_head = csum[:, half][:, None]
+    energy_shift = csum[:, taus + half] - csum[:, taus]
+    diff = energy_head + energy_shift - 2.0 * cross
+    diff[:, 0] = 0.0
+
+    # Cumulative mean normalised difference.
+    running = np.cumsum(diff[:, 1:], axis=1)
+    cmnd = np.ones_like(diff)
+    cmnd[:, 1:] = diff[:, 1:] * taus[1:] / np.maximum(running, 1e-12)
+
+    f0 = np.zeros(n_frames, dtype=np.float32)
+    frame_db = 10.0 * np.log10(np.maximum(sq[:, :half].mean(axis=1), 1e-12))
+    for i in range(n_frames):
+        if frame_db[i] < silence_db:
+            continue
+        c = cmnd[i, tau_min : tau_max + 1]
+        below = np.nonzero(c < threshold)[0]
+        if below.size:
+            k = below[0]
+            while k + 1 < len(c) and c[k + 1] < c[k]:
+                k += 1
+        else:
+            k = int(np.argmin(c))
+            if c[k] > 2 * threshold:
+                continue
+        tau = k + tau_min
+        if 1 <= tau < half:
+            a, b, d = cmnd[i, tau - 1], cmnd[i, tau], cmnd[i, tau + 1]
+            denom = a - 2 * b + d
+            shift = 0.5 * (a - d) / denom if abs(denom) > 1e-12 else 0.0
+            tau = tau + float(np.clip(shift, -1, 1))
+        f0[i] = sr / tau
+    return f0
