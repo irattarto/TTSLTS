@@ -34,6 +34,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var input: EditText
     private lateinit var engine: Spinner
     private lateinit var languageLabel: TextView
+    private lateinit var piperHint: TextView
     private lateinit var language: Spinner
     private lateinit var voice: Spinner
     private lateinit var speedLabel: TextView
@@ -140,6 +141,7 @@ class MainActivity : ComponentActivity() {
                 override fun onNothingSelected(parent: AdapterView<*>?) = Unit
             }
         }
+        engine.tooltipText = PiperVoices.HELP_ENGINE
         column.addView(engine, matchWidth())
 
         languageLabel = TextView(this).apply {
@@ -189,7 +191,15 @@ class MainActivity : ComponentActivity() {
                 override fun onNothingSelected(parent: AdapterView<*>?) = Unit
             }
         }
+        voice.tooltipText = PiperVoices.HELP_VOICE
         column.addView(voice, matchWidth())
+
+        piperHint = TextView(this).apply {
+            text = PiperVoices.HINT
+            visibility = View.GONE
+            setPadding(0, dp(4), 0, 0)
+        }
+        column.addView(piperHint)
 
         speedLabel = TextView(this).apply { setPadding(0, dp(12), 0, 0) }
         column.addView(speedLabel)
@@ -205,6 +215,7 @@ class MainActivity : ComponentActivity() {
                 override fun onStopTrackingTouch(bar: SeekBar?) = Unit
             })
         }
+        speed.tooltipText = PiperVoices.HELP_SPEED
         column.addView(speed, matchWidth())
         updateSpeedLabel()
 
@@ -258,6 +269,7 @@ class MainActivity : ComponentActivity() {
         val piper = selectedEngine == "piper"
         languageLabel.visibility = if (piper) View.GONE else View.VISIBLE
         language.visibility = if (piper) View.GONE else View.VISIBLE
+        piperHint.visibility = if (piper) View.VISIBLE else View.GONE
         download.text = if (piper) "Download Hungarian voice" else "Download voice model"
         ready = false
         refreshControls()

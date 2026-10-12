@@ -7,6 +7,7 @@ from pathlib import Path
 
 import numpy as np
 
+from ttslts.audio.dsp import estimate_f0, resample
 from ttslts.tts import piper_download
 from ttslts.tts.piper_engine import PiperVoice
 
@@ -62,6 +63,11 @@ for voice_id in installed:
             w.setframerate(sr)
             w.writeframes((samples * 32767).astype("<i2").tobytes())
 
+    f0 = estimate_f0(resample(audio, sr, 16000))
+    voiced = f0[f0 > 0]
+    pitch = float(np.median(voiced)) if voiced.size else 0.0
+    print(f"PITCH {voice_id}: median {pitch:.0f} Hz over {voiced.size} voiced frames", flush=True)
+    check(60 < pitch < 400, f"{voice_id}: speaking pitch is plausible")
     save("default", audio)
     steady, _ = voice.synthesize(TEXT, noise_scale=0.4, noise_w=0.5)
     lively, _ = voice.synthesize(TEXT, noise_scale=0.9, noise_w=1.1)

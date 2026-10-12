@@ -218,3 +218,24 @@ def test_engine_can_be_set_back_to_kokoro_for_experimental_hungarian(make_window
     # the user's choice sticks: Kokoro keeps speaking Hungarian (experimental)
     assert w.settings.tts_engine == "kokoro" and w.settings.tts_lang == "hu"
     assert w._tts_form.isRowVisible(w.lang_combo)
+
+
+def test_piper_settings_have_help_text(make_window, monkeypatch):
+    from ttslts.tts import piper_download
+
+    monkeypatch.setattr(
+        piper_download,
+        "installed_voices",
+        lambda base=None: ["hu_HU-anna-medium", "hu_HU-imre-medium"],
+    )
+    w = make_window(tts_engine="piper")
+    for widget in (w.engine_combo, w.piper_combo, w.variation_spin, w.rhythm_spin, w.speed_spin):
+        assert widget.toolTip().strip(), widget
+    assert "Default" in w.variation_spin.toolTip() and "Default" in w.rhythm_spin.toolTip()
+    # every listed voice explains itself on hover
+    tips = [w.piper_combo.itemData(i, Qt.ItemDataRole.ToolTipRole) for i in range(2)]
+    assert all(tips) and tips[0].startswith("Anna") and tips[1].startswith("Imre")
+    # a visible hint is shown with the Piper settings and hidden for Kokoro
+    assert w._tts_form.isRowVisible(w.piper_hint)
+    w.engine_combo.setCurrentIndex(w.engine_combo.findData("kokoro"))
+    assert not w._tts_form.isRowVisible(w.piper_hint)
