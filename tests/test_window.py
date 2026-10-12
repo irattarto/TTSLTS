@@ -239,3 +239,43 @@ def test_piper_settings_have_help_text(make_window, monkeypatch):
     assert w._tts_form.isRowVisible(w.piper_hint)
     w.engine_combo.setCurrentIndex(w.engine_combo.findData("kokoro"))
     assert not w._tts_form.isRowVisible(w.piper_hint)
+
+
+def test_train_tab_lists_files_and_saves_options(make_window, monkeypatch):
+    w = make_window()
+    assert w.tabs.tabText(2) == "Train"
+    assert w.train_name_edit.text() == "my-voice" and w.train_epochs_spin.value() == 200
+    w.train_epochs_spin.setValue(50)
+    assert w.settings.train_epochs == 50
+    w.train_name_edit.setText("My Voice: 1/2")
+    assert w._train_name() == "My Voice 12"
+
+    from PySide6.QtWidgets import QFileDialog
+
+    monkeypatch.setattr(
+        QFileDialog, "getOpenFileNames", lambda *a, **k: (["a.mp3", "b.wav", "a.mp3"], "")
+    )
+    w._train_add_files()
+    w._train_add_files()  # adding the same files again does not duplicate them
+    assert w.train_files.count() == 3
+    w.train_files.setCurrentRow(0)
+    w.train_files.item(0).setSelected(True)
+    w._train_remove_files()
+    assert w.train_files.count() == 2
+
+
+def test_train_tab_follows_training_state(make_window):
+    w = make_window()
+    w.controller.trainRunning.emit(True)
+    assert not w.train_start_btn.isEnabled() and w.train_stop_btn.isEnabled()
+    assert not w.train_name_edit.isEnabled()
+    w.controller.trainProgress.emit(
+        {"stage": "train", "fraction": 0.5, "epoch": 2, "epochs": 4, "step": 1, "steps": 2,
+         "elapsed": 30.0}
+    )  # fmt: skip
+    assert w.train_bar.value() == 500 and "Epoch 2/4" in w.train_status.text()
+    w.controller.trainFinished.emit("v.pth", "v.onnx", True)
+    w.controller.trainRunning.emit(False)
+    assert w.train_use_btn.isEnabled() and w.train_name_edit.isEnabled()
+    w.train_use_btn.click()
+    assert w.settings.rvc_model_path == "v.onnx" and w.rvc_model_edit.text() == "v.onnx"

@@ -28,3 +28,13 @@ def settings_file() -> Path:
 
 def models_dir() -> Path:
     return config_dir() / "models"
+
+
+def voices_dir() -> Path:
+    """Where voices trained in the app are saved (one folder per voice)."""
+    return config_dir() / "voices"
+
+
+def train_dir() -> Path:
+    """Scratch space for training runs (prepared audio, features, resumable checkpoints)."""
+    return config_dir() / "train"

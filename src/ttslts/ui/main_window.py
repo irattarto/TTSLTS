@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QEvent, Qt, QTimer
-from PySide6.QtGui import QCloseEvent
+import re
+from pathlib import Path
+
+from PySide6.QtCore import QEvent, Qt, QTimer, QUrl
+from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
     QCheckBox,
@@ -15,9 +18,11 @@ from PySide6.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QLineEdit,
+    QListWidget,
     QMainWindow,
     QMessageBox,
     QPlainTextEdit,
+    QProgressBar,
     QPushButton,
     QSpinBox,
     QSystemTrayIcon,
@@ -30,6 +35,7 @@ from PySide6.QtWidgets import (
 from ttslts import APP_NAME
 from ttslts.audio import devices
 from ttslts.controller import Controller
+from ttslts.train import prepare
 from ttslts.tts.kokoro_engine import LANGUAGES
 from ttslts.tts.piper_download import (
     HELP_ENGINE,
@@ -59,6 +65,7 @@ class MainWindow(QMainWindow):
         tabs = QTabWidget()
         tabs.addTab(self._build_tts_tab(), "Text to Speech")
         tabs.addTab(self._build_vc_tab(), "Voice Changer")
+        tabs.addTab(self._build_train_tab(), "Train")
         tabs.addTab(self._build_settings_tab(), "Settings")
         self.tabs = tabs
         self.setCentralWidget(tabs)
@@ -74,6 +81,12 @@ class MainWindow(QMainWindow):
         c.kokoroDownloaded.connect(self._on_kokoro_downloaded)
         c.rvcBaseDownloaded.connect(self._on_rvc_base_downloaded)
         c.piperDownloaded.connect(self._on_piper_downloaded)
+        c.pretrainedDownloaded.connect(self._on_pretrained_downloaded)
+        c.trainRunning.connect(self._on_train_running)
+        c.trainStage.connect(self._on_train_stage)
+        c.trainProgress.connect(self._on_train_progress)
+        c.trainSaved.connect(self._on_train_saved)
+        c.trainFinished.connect(self._on_train_finished)
 
         if self.settings.kokoro_model_path and self.settings.kokoro_voices_path:
             QTimer.singleShot(0, controller.load_voices)
@@ -194,6 +207,115 @@ class MainWindow(QMainWindow):
         self.latency_label = QLabel("")
         layout.addWidget(self.latency_label)
         layout.addStretch(1)
+        return w
+
+    def _build_train_tab(self) -> QWidget:
+        s = self.settings
+        w = QWidget()
+        layout = QVBoxLayout(w)
+        intro = QLabel(
+            "Train your own voice from recordings of it. Add mp3 or wav files with one person "
+            "speaking clearly, without music or background noise. About 10 minutes gives a good "
+            "voice; even 2-3 minutes works. Only use recordings of voices you have permission "
+            "to use."
+        )
+        intro.setWordWrap(True)
+        layout.addWidget(intro)
+        self.train_unavailable = QLabel(self.controller.training_unavailable_reason())
+        self.train_unavailable.setWordWrap(True)
+        self.train_unavailable.setStyleSheet("color: #c0392b;")
+        self.train_unavailable.setVisible(bool(self.train_unavailable.text()))
+        layout.addWidget(self.train_unavailable)
+
+        self.train_files = QListWidget()
+        self.train_files.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
+        self.train_files.setMinimumHeight(70)
+        layout.addWidget(self.train_files, 1)
+        file_buttons = QHBoxLayout()
+        self.train_add_btn = QPushButton("Add recordings…")
+        self.train_add_btn.clicked.connect(self._train_add_files)
+        self.train_remove_btn = QPushButton("Remove")
+        self.train_remove_btn.clicked.connect(self._train_remove_files)
+        file_buttons.addWidget(self.train_add_btn)
+        file_buttons.addWidget(self.train_remove_btn)
+        file_buttons.addStretch(1)
+        layout.addLayout(file_buttons)
+
+        form = QFormLayout()
+        self.train_name_edit = QLineEdit(s.train_name)
+        self.train_name_edit.setToolTip("The voice is saved as <name>.pth and <name>.onnx")
+        self.train_name_edit.editingFinished.connect(
+            lambda: self._set("train_name", self._train_name())
+        )
+        form.addRow("Voice name", self.train_name_edit)
+        self.train_sr_combo = QComboBox()
+        for rate in (32000, 40000, 48000):
+            self.train_sr_combo.addItem(f"{rate // 1000} kHz", rate)
+        self.train_sr_combo.setCurrentIndex(
+            max(0, self.train_sr_combo.findData(s.train_sample_rate))
+        )
+        self.train_sr_combo.currentIndexChanged.connect(
+            lambda i: self._set("train_sample_rate", self.train_sr_combo.itemData(i))
+        )
+        self.train_sr_combo.setToolTip("40 kHz is the usual choice; 48 kHz sounds slightly clearer")
+        form.addRow("Sample rate", self.train_sr_combo)
+        self.train_epochs_spin = QSpinBox(minimum=1, maximum=2000)
+        self.train_epochs_spin.setValue(s.train_epochs)
+        self.train_epochs_spin.valueChanged.connect(lambda v: self._set("train_epochs", v))
+        self.train_epochs_spin.setToolTip(
+            "How many passes over your recordings. 100-300 suits a few minutes of audio; "
+            "too many on little audio makes the voice worse. You can stop at any time."
+        )
+        form.addRow("Epochs", self.train_epochs_spin)
+        self.train_batch_spin = QSpinBox(minimum=1, maximum=64)
+        self.train_batch_spin.setValue(s.train_batch_size)
+        self.train_batch_spin.valueChanged.connect(lambda v: self._set("train_batch_size", v))
+        self.train_batch_spin.setToolTip("Lower this if you run out of GPU memory")
+        form.addRow("Batch size", self.train_batch_spin)
+        self.train_save_spin = QSpinBox(minimum=1, maximum=500)
+        self.train_save_spin.setValue(s.train_save_every)
+        self.train_save_spin.valueChanged.connect(lambda v: self._set("train_save_every", v))
+        self.train_save_spin.setToolTip(
+            "The voice file is updated this often, so you can try it early"
+        )
+        form.addRow("Save every", self.train_save_spin)
+        self.train_save_spin.setSuffix(" epochs")
+        layout.addLayout(form)
+
+        buttons = QHBoxLayout()
+        self.train_start_btn = QPushButton("Start training")
+        self.train_start_btn.clicked.connect(self._train_start)
+        self.train_stop_btn = QPushButton("Stop")
+        self.train_stop_btn.setEnabled(False)
+        self.train_stop_btn.clicked.connect(self.controller.stop_training)
+        self.train_use_btn = QPushButton("Use this voice")
+        self.train_use_btn.setEnabled(False)
+        self.train_use_btn.clicked.connect(self._train_use_voice)
+        self.train_folder_btn = QPushButton("Open folder")
+        self.train_folder_btn.clicked.connect(self._train_open_folder)
+        for b in (
+            self.train_start_btn,
+            self.train_stop_btn,
+            self.train_use_btn,
+            self.train_folder_btn,
+        ):
+            buttons.addWidget(b)
+        layout.addLayout(buttons)
+
+        self.train_bar = QProgressBar()
+        self.train_bar.setRange(0, 1000)
+        layout.addWidget(self.train_bar)
+        self.train_status = QLabel("")
+        self.train_status.setWordWrap(True)
+        layout.addWidget(self.train_status)
+        self.train_log = QPlainTextEdit()
+        self.train_log.setReadOnly(True)
+        self.train_log.setMaximumHeight(90)
+        layout.addWidget(self.train_log)
+        self._train_result = ""  # the .onnx of the last finished run
+        self._train_busy = False
+        self._pending_train: tuple | None = None
+        self._apply_train_availability()
         return w
 
     def _build_settings_tab(self) -> QWidget:
@@ -444,6 +566,170 @@ class MainWindow(QMainWindow):
         self.settings.contentvec_path = contentvec
         self.settings.rmvpe_path = rmvpe
         self.controller.save_settings()
+
+    # -- training --------------------------------------------------------
+    def _train_name(self) -> str:
+        """The voice name as a safe folder / file name."""
+        name = re.sub(r"[^\w\- ]", "", self.train_name_edit.text(), flags=re.UNICODE).strip()
+        return name or "my-voice"
+
+    def _apply_train_availability(self) -> None:
+        ready = not self.train_unavailable.text()
+        self.train_start_btn.setEnabled(ready and not self._train_busy)
+
+    def _train_add_files(self) -> None:
+        files, _ = QFileDialog.getOpenFileNames(
+            self, "Recordings to train on", "", prepare.AUDIO_FILTER
+        )
+        have = {self.train_files.item(i).text() for i in range(self.train_files.count())}
+        for f in files:
+            if f not in have:
+                self.train_files.addItem(f)
+
+    def _train_remove_files(self) -> None:
+        for item in self.train_files.selectedItems():
+            self.train_files.takeItem(self.train_files.row(item))
+
+    def _train_start(self) -> None:
+        from ttslts import paths
+        from ttslts.train import pretrained
+        from ttslts.train.trainer import CHECKPOINT
+
+        s = self.settings
+        files = [self.train_files.item(i).text() for i in range(self.train_files.count())]
+        name = self._train_name()
+        self.train_name_edit.setText(name)
+        self._set("train_name", name)
+
+        resume = False
+        if (paths.train_dir() / name / CHECKPOINT).exists():
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Question)
+            box.setWindowTitle(APP_NAME)
+            box.setText(f"A voice called “{name}” has been trained here before.")
+            box.setInformativeText(
+                "Continue training it where it stopped (the recordings and settings from "
+                "before are used), or start over with the recordings listed now?"
+            )
+            cont = box.addButton("Continue", QMessageBox.ButtonRole.AcceptRole)
+            fresh = box.addButton("Start over", QMessageBox.ButtonRole.DestructiveRole)
+            box.addButton(QMessageBox.StandardButton.Cancel)
+            box.exec()
+            if box.clickedButton() is cont:
+                resume = True
+            elif box.clickedButton() is not fresh:
+                return
+            if not resume:
+                import shutil
+
+                shutil.rmtree(paths.train_dir() / name, ignore_errors=True)
+
+        if not pretrained.is_installed(s.train_sample_rate):
+            self._download_pretrained(then_train=(files, name, resume))
+            return
+        self.train_log.clear()
+        self._train_result = ""
+        self.train_use_btn.setEnabled(False)
+        self.controller.start_training(files, name, resume)
+
+    def _download_pretrained(self, then_train: tuple | None = None) -> None:
+        from ttslts.train import pretrained
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(pretrained.CONSENT_TITLE)
+        box.setText("Download the pretrained voice models?")
+        box.setInformativeText(pretrained.CONSENT_TEXT)
+        accept = box.addButton("I accept, download", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        if box.clickedButton() is accept:
+            self._pending_train = then_train
+            self.train_start_btn.setEnabled(False)
+            self.controller.download_pretrained(self.settings.train_sample_rate)
+
+    def _on_pretrained_downloaded(self, _sample_rate: int) -> None:
+        self._apply_train_availability()
+        pending, self._pending_train = self._pending_train, None
+        if pending is not None:
+            self.train_log.clear()
+            self._train_result = ""
+            self.train_use_btn.setEnabled(False)
+            self.controller.start_training(*pending)
+
+    def _on_train_running(self, running: bool) -> None:
+        self._train_busy = running
+        self.train_stop_btn.setEnabled(running)
+        for widget in (
+            self.train_add_btn,
+            self.train_remove_btn,
+            self.train_files,
+            self.train_name_edit,
+            self.train_sr_combo,
+            self.train_epochs_spin,
+            self.train_batch_spin,
+            self.train_save_spin,
+        ):
+            widget.setEnabled(not running)
+        self._apply_train_availability()
+
+    def _on_train_stage(self, text: str) -> None:
+        self.train_status.setText(text)
+        if text:
+            self.train_log.appendPlainText(text)
+
+    def _on_train_progress(self, event: dict) -> None:
+        self.train_bar.setValue(int(event.get("fraction", 0) * 1000))
+        if event.get("stage") != "train":
+            return
+        elapsed = event.get("elapsed", 0.0)
+        epoch, epochs, step, steps = (event[k] for k in ("epoch", "epochs", "step", "steps"))
+        done = (epoch - 1 + step / steps) / epochs
+        eta = elapsed * (1 - done) / done if done > 0.002 else 0
+        text = f"Epoch {epoch}/{epochs}"
+        if eta:
+            text += f" - about {int(eta // 60)} min left"
+        self.train_status.setText(text)
+        losses = event.get("losses")
+        if losses:
+            self.train_log.appendPlainText(
+                f"Epoch {epoch}: mel {losses['mel']:.1f}  gen {losses['gen']:.1f}  "
+                f"disc {losses['disc']:.2f}"
+            )
+
+    def _on_train_saved(self, _pth: str, epoch: int) -> None:
+        self.train_log.appendPlainText(f"Saved the voice at epoch {epoch}")
+
+    def _on_train_finished(self, pth: str, onnx: str, finished: bool) -> None:
+        if not pth:
+            self.train_status.setText("Stopped before anything was saved.")
+            return
+        self._train_result = onnx
+        self.train_use_btn.setEnabled(bool(onnx))
+        if finished:
+            self.train_bar.setValue(1000)
+        self.train_status.setText(
+            ("Done. " if finished else "Stopped; the last saved voice is ready. ")
+            + f"Saved to {Path(pth).parent}"
+        )
+        self.train_log.appendPlainText(f"Voice files: {pth}\n{onnx}")
+
+    def _train_use_voice(self) -> None:
+        if not self._train_result:
+            return
+        self.rvc_model_edit.setText(self._train_result)
+        self._set("rvc_model_path", self._train_result)
+        self.statusBar().showMessage(
+            "Voice selected: use it on the Voice Changer tab, or tick “Speak with my voice model” "
+            "on Text to Speech"
+        )
+
+    def _train_open_folder(self) -> None:
+        from ttslts import paths
+
+        folder = paths.voices_dir() / self._train_name()
+        folder.mkdir(parents=True, exist_ok=True)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
 
     def _on_kokoro_downloaded(self, model: str, voices: str) -> None:
         self.kokoro_model_edit.setText(model)
