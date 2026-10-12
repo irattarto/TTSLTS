@@ -2,24 +2,20 @@ import json
 import sys
 import time
 
-import pytest
 from PySide6.QtWidgets import QApplication
 
 from ttslts.controller import Controller
 from ttslts.settings import Settings
 
 
-def test_unavailable_reason_when_packaged(monkeypatch):
-    monkeypatch.setattr(sys, "frozen", True, raising=False)
-    assert "not part of the packaged app" in Controller.training_unavailable_reason()
-
-
-def test_start_requires_recordings_and_contentvec(tmp_path):
+def test_start_requires_environment_recordings_and_contentvec(monkeypatch):
     controller = Controller(Settings(), save=lambda s: None)
     errors = []
     controller.error.connect(errors.append)
-    if Controller.training_unavailable_reason():
-        pytest.skip("training dependencies are not installed")
+    monkeypatch.setattr(Controller, "training_runtime_ready", staticmethod(lambda: False))
+    controller.start_training(["a.wav"], "voice", resume=False)
+    assert "not set up" in errors[-1]
+    monkeypatch.setattr(Controller, "training_runtime_ready", staticmethod(lambda: True))
     controller.start_training([], "voice", resume=False)
     assert "at least one recording" in errors[-1]
     controller.start_training(["a.wav"], "voice", resume=False)
@@ -51,10 +47,12 @@ def test_runner_events_reach_the_ui(tmp_path, monkeypatch):
     g, d = tmp_path / "g.pth", tmp_path / "d.pth"
     g.write_bytes(b"x")
     d.write_bytes(b"x")
-    from ttslts.train import pretrained
+    from ttslts.train import pretrained, runtime
 
     monkeypatch.setattr(pretrained, "paths_for", lambda sr, dest=None: (g, d))
-    monkeypatch.setattr(Controller, "training_unavailable_reason", staticmethod(lambda: ""))
+    monkeypatch.setattr(Controller, "training_runtime_ready", staticmethod(lambda: True))
+    monkeypatch.setattr(runtime, "python_command", lambda root=None: [sys.executable])
+    monkeypatch.setattr(runtime, "prepare_for_run", lambda root=None: {})
 
     controller = Controller(Settings(contentvec_path=str(contentvec)), save=lambda s: None)
     got = []
