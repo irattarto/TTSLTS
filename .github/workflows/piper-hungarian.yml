@@ -1,0 +1,27 @@
+name: Verify Hungarian voices
+
+# Downloads the real Piper Hungarian voices through the app's code and synthesizes speech.
+# The WAV samples are attached so they can be listened to.
+on:
+  pull_request:
+    paths:
+      - "src/ttslts/tts/piper_*.py"
+      - "tools/verify_piper.py"
+      - ".github/workflows/piper-hungarian.yml"
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e .
+      - run: mkdir samples && python tools/verify_piper.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: piper-hungarian-samples
+          path: samples/*.wav
