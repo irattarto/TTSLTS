@@ -79,7 +79,7 @@ def compare(name: str, torch_model, state, cfg, frames: int) -> None:
     corr = float(np.corrcoef(mine.ravel(), theirs.ravel())[0, 1]) if same_shape else 0.0
     peak = float(np.abs(theirs).max())
     check(
-        same_shape and err < 1.5e-2 and corr > 0.998,
+        same_shape and err < 5e-3 and corr > 0.9999,
         f"{name}, {frames} frames: shape {mine.shape}, peak {peak:.3f}, "
         f"max error {err:.2e}, correlation {corr:.6f}",
     )

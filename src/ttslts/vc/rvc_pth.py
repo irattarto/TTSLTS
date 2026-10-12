@@ -377,7 +377,7 @@ def build_model(state: dict, cfg: RvcConfig, noise: bool = True):
             op("Slice", [wrapped, i64([0]), i64([-1]), i64([2])]),
         ],
     )
-    jump = op("Mul", [op("Cast", [op("Less", [step, f32(0.0)])], to=TensorProto.FLOAT), f32(-1.0)])
+    jump = op("Mul", [op("Cast", [op("Less", [step, f32(-0.5)])], to=TensorProto.FLOAT), f32(-1.0)])
     shift = op("Pad", [jump, i64([0, 0, 1, 0, 0, 0])])
     wave = op(
         "Sin", [op("Mul", [op("CumSum", [op("Add", [rad_up, shift]), i64(2)]), f32(2.0 * math.pi)])]
