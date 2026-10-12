@@ -104,3 +104,11 @@ def test_cancel_saves_and_stops(tmp_path):
     with pytest.raises(trainer.Cancelled):
         run(work, pretrained, epochs=5, cancelled=cancelled)
     assert (work.parent / "voice.pth").exists() and (work / trainer.CHECKPOINT).exists()
+
+
+@pytest.mark.parametrize("rate", sorted(hparams.SAMPLE_RATES))
+def test_segment_is_a_whole_number_of_hops(rate):
+    # The generator emits segment // hop frames of hop samples; the target slice must match.
+    cfg = hparams.SAMPLE_RATES[rate]
+    assert cfg.segment_samples % cfg.hop == 0
+    assert cfg.model_args(False)["segment_size"] * cfg.hop == cfg.segment_samples

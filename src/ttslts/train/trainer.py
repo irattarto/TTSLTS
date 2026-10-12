@@ -124,7 +124,7 @@ def train(
         sched_d.step()
     scaler = torch.amp.GradScaler("cuda", enabled=amp)
 
-    seg_frames = hp.SEGMENT_SAMPLES // cfg.hop
+    seg_frames = cfg.segment_samples // cfg.hop
     started = time.monotonic()
 
     def save(done_epoch: int) -> None:
@@ -167,7 +167,7 @@ def train(
                     )
                 if amp:
                     y_hat_mel = y_hat_mel.half()
-                target = commons.slice_segments(wave, ids_slice * cfg.hop, hp.SEGMENT_SAMPLES)
+                target = commons.slice_segments(wave, ids_slice * cfg.hop, cfg.segment_samples)
                 d_real, d_fake, _, _ = net_d(target, y_hat.detach())
                 with torch.autocast("cuda", enabled=False):
                     loss_d = discriminator_loss(d_real, d_fake)
