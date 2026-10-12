@@ -35,10 +35,44 @@ jobs:
         with:
           name: TTSLTS-windows
           path: TTSLTS-windows.zip
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+      - name: Fetch sherpa-onnx native libraries
+        run: ./android/fetch-native.sh
+      - name: Build debug APK
+        working-directory: android
+        run: gradle --no-daemon assembleDebug
+      - name: Name the APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk TTSLTS-android.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TTSLTS-android
+          path: TTSLTS-android.apk
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
       - name: Publish pre-release
-        if: startsWith(github.ref, 'refs/tags/v')
         uses: softprops/action-gh-release@v2
         with:
           prerelease: true
           generate_release_notes: true
-          files: TTSLTS-windows.zip
+          files: |
+            assets/TTSLTS-windows.zip
+            assets/TTSLTS-android.apk
