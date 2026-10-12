@@ -230,7 +230,13 @@ class MainWindow(QMainWindow):
         dl = QPushButton("Download Kokoro (~340 MB)")
         dl.clicked.connect(self.controller.download_kokoro)
         ml.addRow("", dl)
-        self.rvc_model_edit = self._path_row(ml, "RVC v2 voice", "rvc_model_path", "ONNX (*.onnx)")
+        self.rvc_model_edit = self._path_row(
+            ml, "RVC v2 voice", "rvc_model_path", "RVC v2 voice (*.pth *.onnx)"
+        )
+        self.rvc_model_edit.setToolTip(
+            "A downloaded RVC v2 voice: the .pth file works directly (converted once, "
+            "the first time it is used) and so does an .onnx export"
+        )
         self.contentvec_edit = self._path_row(ml, "ContentVec", "contentvec_path", "ONNX (*.onnx)")
         self.rmvpe_edit = self._path_row(ml, "RMVPE (optional)", "rmvpe_path", "ONNX (*.onnx)")
         piper_dl = QPushButton("Download Hungarian voices (Piper, ~190 MB)")

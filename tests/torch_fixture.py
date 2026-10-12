@@ -14,7 +14,9 @@ _STORAGE_NAMES = {np.dtype(np.float16): "HalfStorage", np.dtype(np.float32): "Fl
 _STORAGE_NAMES[np.dtype(np.int64)] = "LongStorage"
 
 
-def write_checkpoint(path, tensors: dict[str, np.ndarray], wrap: str | None = None) -> None:
+def write_checkpoint(
+    path, tensors: dict[str, np.ndarray], wrap: str | None = None, extra: dict | None = None
+) -> None:
     torch_mod = types.ModuleType("torch")
     utils_mod = types.ModuleType("torch._utils")
     storage_classes = {}
@@ -62,6 +64,8 @@ def write_checkpoint(path, tensors: dict[str, np.ndarray], wrap: str | None = No
         shape = tuple(array.shape)
         state[name] = Tensor(storage, shape)
     payload = OrderedDict(model=state) if wrap else state
+    if extra is not None:  # RVC voices: {"weight": state, "config": [...], ...}
+        payload = {"weight": state, **extra}
 
     class Pickler(pickle.Pickler):
         def persistent_id(self, obj):
