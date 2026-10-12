@@ -28,6 +28,7 @@ class Controller(QObject):
     voicesLoaded = Signal(list)
     kokoroDownloaded = Signal(str, str)
     rvcBaseDownloaded = Signal(str, str)
+    piperDownloaded = Signal(list)
 
     def __init__(self, settings: Settings, save: Callable[[Settings], None] | None = None):
         super().__init__()
@@ -38,6 +39,8 @@ class Controller(QObject):
         self._kokoro_key = None
         self._rvc = None
         self._rvc_key = None
+        self._piper = None
+        self._piper_key = None
         self._vc = None
 
     # -- settings --------------------------------------------------------
@@ -59,6 +62,25 @@ class Controller(QObject):
                 self._kokoro = KokoroEngine.load(*key)
                 self._kokoro_key = key
             return self._kokoro
+
+    def piper(self):
+        s = self.settings
+        key = (s.piper_voice, s.use_gpu)
+        with self._lock:
+            if self._piper is None or self._piper_key != key:
+                from ttslts.tts import piper_download
+                from ttslts.tts.piper_engine import PiperVoice
+
+                if s.piper_voice not in piper_download.installed_voices():
+                    raise ValueError(
+                        "No Hungarian voice is installed "
+                        "(Settings > Models > Download Hungarian voices)"
+                    )
+                model, config = piper_download.voice_paths(s.piper_voice)
+                self.status.emit("Loading Hungarian voice…")
+                self._piper = PiperVoice.load(str(model), str(config), s.use_gpu)
+                self._piper_key = key
+            return self._piper
 
     def rvc(self):
         s = self.settings
@@ -103,6 +125,21 @@ class Controller(QObject):
 
         self._background(work, "download-kokoro")
 
+    def download_piper_voices(self) -> None:
+        """Fetch the Hungarian Piper voices. Call only after consent."""
+        from ttslts.tts import piper_download
+
+        def progress(name, done, total):
+            pct = f" {done * 100 // total}%" if total else ""
+            self.status.emit(f"Downloading {name}{pct}")
+
+        def work():
+            installed = piper_download.download_voices(progress)
+            self.piperDownloaded.emit(installed)
+            self.status.emit("Hungarian voices ready")
+
+        self._background(work, "download-piper")
+
     def download_rvc_base(self) -> None:
         """Fetch ContentVec and RMVPE from the original RVC project. Call only after consent."""
         from ttslts.vc import rvc_base
@@ -121,7 +158,12 @@ class Controller(QObject):
     # -- text to speech --------------------------------------------------
     def render_tts(self, text: str) -> tuple[np.ndarray, int]:
         s = self.settings
-        audio, sr = self.kokoro().synthesize(text, s.tts_voice, s.tts_speed, s.tts_lang)
+        if s.tts_engine == "piper":
+            audio, sr = self.piper().synthesize(
+                text, s.tts_speed, noise_scale=s.piper_variation, noise_w=s.piper_rhythm
+            )
+        else:
+            audio, sr = self.kokoro().synthesize(text, s.tts_voice, s.tts_speed, s.tts_lang)
         if s.tts_through_rvc and audio.size:
             model = self.rvc()
             self.status.emit("Applying voice model…")

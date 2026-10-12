@@ -43,7 +43,9 @@ Settings are saved automatically to `%APPDATA%\TTSLTS\settings.json`.
 1. Settings > Models > **Download Kokoro** (about 340 MB, saved to `%APPDATA%\TTSLTS\models\kokoro`). You can also point the two fields at your own `kokoro-v1.0.onnx` and `voices-v1.0.bin`.
 2. On the **Text to Speech** tab, type text, pick a voice, language and speed, then **Speak** or **Save WAV…**.
 3. **Play on** picks the output device. Choose a virtual cable to send speech into Discord, games or OBS.
-   **Hungarian** (experimental) is not a Kokoro language, so no voice was trained on it. Choosing it makes espeak-ng pronounce the Hungarian text and one of the existing voices read it, so expect a foreign accent. The Android app has the same option.
+   **Hungarian:** for real Hungarian voices pick the **Piper (Hungarian voices)** engine on the TTS tab after downloading them (Settings > Models > *Download Hungarian voices*, about 190 MB, from the original [Piper voice collection](https://huggingface.co/rhasspy/piper-voices); you are asked to accept the terms first). The voices Anna, Berta and Imre use CC0 training data but were fine-tuned from Piper's US English *lessac* voice, whose data is licensed for research use, so keep them to research and personal use.
+
+   Kokoro's own **Hungarian (experimental)** language option, by contrast, is not a Kokoro language, so no voice was trained on it. Choosing it makes espeak-ng pronounce the Hungarian text and one of the existing voices read it, so expect a foreign accent. The Android app has the same option.
 4. Tick **Speak with my voice model (RVC)** to run Kokoro's output through your RVC voice, giving TTS your custom voice.
 
 ### Voice changer
