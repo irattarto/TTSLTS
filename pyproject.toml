@@ -1,0 +1,41 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ttslts"
+version = "0.1.0"
+description = "Offline system tray app: Kokoro text-to-speech and RVC v2 real-time voice changing"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+dependencies = [
+    "PySide6>=6.6",
+    "numpy>=1.24",
+    "scipy>=1.10",
+    "sounddevice>=0.4.6",
+    "onnxruntime>=1.17",
+    "kokoro-onnx>=0.4.0",
+]
+
+[project.optional-dependencies]
+# For NVIDIA GPUs: install this extra, then `pip uninstall onnxruntime` so the
+# CUDA build is the one that gets imported (see README).
+gpu = ["onnxruntime-gpu>=1.17"]
+dev = ["pytest>=8", "ruff>=0.5"]
+
+[project.gui-scripts]
+ttslts = "ttslts.app:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP"]
