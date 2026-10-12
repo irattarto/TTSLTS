@@ -299,3 +299,18 @@ def test_voice_model_picker_lists_trained_voices_by_name(make_window, tmp_path):
     w._on_voice_picked(chosen)
     assert w.settings.rvc_model_path == chosen and w.rvc_model_edit.text() == chosen
     assert all(c.currentText() == "bob" for c in w._voice_combos)  # both tabs stay in step
+
+
+def test_trained_voice_fixes_speaker_id_at_zero(make_window):
+    from ttslts import paths
+
+    folder = paths.voices_dir() / "anna"
+    folder.mkdir(parents=True)
+    (folder / "anna.onnx").write_bytes(b"x")
+    w = make_window(rvc_model_path="elsewhere.onnx", speaker_id=1)
+    assert w.speaker_spin.isEnabled() and w.speaker_spin.value() == 1  # a shared voice
+    w._on_voice_picked(str(folder / "anna.onnx"))
+    assert w.speaker_spin.value() == 0 and not w.speaker_spin.isEnabled()
+    assert w.settings.speaker_id == 0
+    w._on_voice_picked("elsewhere.onnx")
+    assert w.speaker_spin.isEnabled()

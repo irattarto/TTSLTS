@@ -197,9 +197,10 @@ class MainWindow(QMainWindow):
         self.speaker_spin.valueChanged.connect(lambda v: self._set("speaker_id", v))
         self.speaker_spin.setToolTip(
             "Only for voices that contain several speakers. Voices trained in TTSLTS have one "
-            "speaker, number 0, so leave this at 0."
+            "speaker, number 0, so this is fixed at 0 for them."
         )
         form.addRow("Speaker ID", self.speaker_spin)
+        self._apply_speaker_lock()
         layout.addLayout(form)
 
         hint = QLabel(
@@ -469,6 +470,19 @@ class MainWindow(QMainWindow):
             )
             combo.setCurrentIndex(index)
             combo.blockSignals(False)
+        self._apply_speaker_lock()
+
+    def _apply_speaker_lock(self) -> None:
+        """A voice trained here has a single speaker (0); other IDs would sound wrong."""
+        spin = getattr(self, "speaker_spin", None)
+        if spin is None:
+            return
+        trained = any(
+            self._same_path(self.settings.rvc_model_path, p) for _n, p in self._trained_voices()
+        )
+        if trained:
+            spin.setValue(0)  # also saves the setting through its valueChanged handler
+        spin.setEnabled(not trained)
 
     def _on_voice_picked(self, path: str) -> None:
         if hasattr(self, "rvc_model_edit"):
