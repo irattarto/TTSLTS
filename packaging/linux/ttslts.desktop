@@ -1,0 +1,8 @@
+[Desktop Entry]
+Type=Application
+Name=TTSLTS
+Comment=Offline text to speech and voice changer
+Exec=/usr/bin/ttslts
+Icon=ttslts
+Terminal=false
+Categories=AudioVideo;Audio;

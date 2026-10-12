@@ -103,4 +103,14 @@ cd android && gradle assembleDebug # APK in app/build/outputs/apk/debug/
 
 ## Releases
 
-Pushing a tag such as `v0.1.0` runs the Release workflow, which builds the Windows zip and the Android APK and attaches both to a GitHub pre-release.
+Pushing a tag such as `v0.1.0` runs the Release workflow, which builds these downloads and attaches them to a GitHub pre-release:
+
+| File | For |
+|---|---|
+| `TTSLTS-Setup.exe` | Windows installer (per-user, no administrator needed) |
+| `TTSLTS-windows.zip` | Windows portable folder, run `TTSLTS.exe` |
+| `ttslts_<version>_amd64.deb` | Linux installer for Debian, Ubuntu and derivatives (`sudo apt install ./ttslts_*.deb`) |
+| `TTSLTS-linux-x86_64.tar.gz` | Linux portable folder, run `TTSLTS` |
+| `TTSLTS-android.apk` | Android, text to speech only |
+
+On Linux the tray icon needs a desktop that shows tray icons (GNOME needs an extension).
