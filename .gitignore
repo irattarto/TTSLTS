@@ -13,3 +13,10 @@ dist/
 *.bin
 *.index
 models/
+
+# Android
+android/.gradle/
+android/app/build/
+android/build/
+android/local.properties
+android/app/src/main/jniLibs/
