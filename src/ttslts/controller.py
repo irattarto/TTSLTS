@@ -159,7 +159,9 @@ class Controller(QObject):
     def render_tts(self, text: str) -> tuple[np.ndarray, int]:
         s = self.settings
         if s.tts_engine == "piper":
-            audio, sr = self.piper().synthesize(text, s.tts_speed)
+            audio, sr = self.piper().synthesize(
+                text, s.tts_speed, noise_scale=s.piper_variation, noise_w=s.piper_rhythm
+            )
         else:
             audio, sr = self.kokoro().synthesize(text, s.tts_voice, s.tts_speed, s.tts_lang)
         if s.tts_through_rvc and audio.size:

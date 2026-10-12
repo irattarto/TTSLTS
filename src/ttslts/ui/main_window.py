@@ -110,6 +110,17 @@ class MainWindow(QMainWindow):
         form.addRow("Language", self.lang_combo)
         self._tts_form = form
 
+        self.variation_spin = QDoubleSpinBox(minimum=0.1, maximum=1.5, singleStep=0.05)
+        self.variation_spin.setValue(s.piper_variation)
+        self.variation_spin.setToolTip("Lower is steadier, higher is more varied and expressive")
+        self.variation_spin.valueChanged.connect(lambda v: self._set("piper_variation", float(v)))
+        form.addRow("Voice variation", self.variation_spin)
+        self.rhythm_spin = QDoubleSpinBox(minimum=0.1, maximum=1.5, singleStep=0.05)
+        self.rhythm_spin.setValue(s.piper_rhythm)
+        self.rhythm_spin.setToolTip("Lower gives an even rhythm, higher a livelier one")
+        self.rhythm_spin.valueChanged.connect(lambda v: self._set("piper_rhythm", float(v)))
+        form.addRow("Rhythm variation", self.rhythm_spin)
+
         self.speed_spin = QDoubleSpinBox(minimum=0.5, maximum=2.0, singleStep=0.05)
         self.speed_spin.setValue(s.tts_speed)
         self.speed_spin.valueChanged.connect(lambda v: self._set("tts_speed", float(v)))
@@ -328,6 +339,8 @@ class MainWindow(QMainWindow):
         piper = self.settings.tts_engine == "piper"
         form = self._tts_form
         form.setRowVisible(self.piper_combo, piper)
+        form.setRowVisible(self.variation_spin, piper)
+        form.setRowVisible(self.rhythm_spin, piper)
         form.setRowVisible(self.voice_combo, not piper)
         form.setRowVisible(self.lang_combo, not piper)
 

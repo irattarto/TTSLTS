@@ -18,6 +18,10 @@ WIDE_TEXT = (
     "Árvíztűrő tükörfúrógép. Egy két három négy öt hat hét nyolc kilenc tíz. "
     "Mennyi az idő? Köszönöm szépen, viszontlátásra! Gyönyörű, nagyon szép."
 )
+NUMBERS = (
+    "Dr. Kovács 12 almát vett, kb. 3,5 kg-ot, 1500 forintért. Ez az 1. kerület, pl. a Váci utca. "
+    "A hőmérséklet 25 °C, a nyereség 45%."
+)
 out = Path(tempfile.mkdtemp(prefix="piper-verify-"))
 failures: list[str] = []
 
@@ -50,11 +54,25 @@ for voice_id in installed:
     check(rms > 0.02, f"{voice_id}: not silent")
     fast, _ = voice.synthesize(TEXT, speed=1.5)
     check(len(fast) < len(audio) * 0.85, f"{voice_id}: speed 1.5 is shorter")
-    with wave.open(str(Path("samples") / f"{voice_id}.wav"), "wb") as w:
-        w.setnchannels(1)
-        w.setsampwidth(2)
-        w.setframerate(sr)
-        w.writeframes((audio * 32767).astype("<i2").tobytes())
+
+    def save(name: str, samples, voice_id=voice_id, sr=sr) -> None:
+        with wave.open(str(Path("samples") / f"{voice_id}-{name}.wav"), "wb") as w:
+            w.setnchannels(1)
+            w.setsampwidth(2)
+            w.setframerate(sr)
+            w.writeframes((samples * 32767).astype("<i2").tobytes())
+
+    save("default", audio)
+    steady, _ = voice.synthesize(TEXT, noise_scale=0.4, noise_w=0.5)
+    lively, _ = voice.synthesize(TEXT, noise_scale=0.9, noise_w=1.1)
+    save("steady", steady)
+    save("lively", lively)
+    numbers, _ = voice.synthesize(NUMBERS)
+    check(
+        np.isfinite(numbers).all() and len(numbers) / sr > 3,
+        f"{voice_id}: numbers and abbreviations",
+    )
+    save("numbers", numbers)
 
 if failures:
     print(f"{len(failures)} check(s) failed", file=sys.stderr)

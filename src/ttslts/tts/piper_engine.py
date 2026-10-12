@@ -90,13 +90,21 @@ class PiperVoice:
         return {p for p in phonemes if p not in self.id_map}
 
     # -- ids -> audio ----------------------------------------------------------------------
-    def _run(self, ids: list[int], speed: float, speaker_id: int) -> np.ndarray:
+    def _run(
+        self,
+        ids: list[int],
+        speed: float,
+        speaker_id: int,
+        noise_scale: float | None = None,
+        noise_w: float | None = None,
+    ) -> np.ndarray:
+        noise_scale = self.noise_scale if noise_scale is None else noise_scale
+        noise_w = self.noise_w if noise_w is None else noise_w
         feed = {
             "input": np.asarray([ids], dtype=np.int64),
             "input_lengths": np.asarray([len(ids)], dtype=np.int64),
             "scales": np.asarray(
-                [self.noise_scale, self.length_scale / max(speed, 0.1), self.noise_w],
-                dtype=np.float32,
+                [noise_scale, self.length_scale / max(speed, 0.1), noise_w], dtype=np.float32
             ),
         }
         if "sid" in self._input_names:
@@ -105,8 +113,18 @@ class PiperVoice:
         return np.asarray(audio, dtype=np.float32).reshape(-1)
 
     def synthesize(
-        self, text: str, speed: float = 1.0, speaker_id: int = 0
+        self,
+        text: str,
+        speed: float = 1.0,
+        speaker_id: int = 0,
+        noise_scale: float | None = None,
+        noise_w: float | None = None,
     ) -> tuple[np.ndarray, int]:
+        """Speak ``text``. ``noise_scale`` varies the voice, ``noise_w`` the rhythm."""
+        if self.espeak_voice.startswith("hu"):
+            from ttslts.tts.hu_text import normalize_hungarian
+
+            text = normalize_hungarian(text)
         pause = np.zeros(int(SENTENCE_PAUSE_S * self.sample_rate), dtype=np.float32)
         parts: list[np.ndarray] = []
         for sentence in split_sentences(text):
@@ -115,7 +133,8 @@ class PiperVoice:
                 continue
             if parts:
                 parts.append(pause)
-            parts.append(self._run(self.phoneme_ids(phonemes), speed, speaker_id))
+            ids = self.phoneme_ids(phonemes)
+            parts.append(self._run(ids, speed, speaker_id, noise_scale, noise_w))
         if not parts:
             return np.zeros(0, dtype=np.float32), self.sample_rate
         audio = np.concatenate(parts)

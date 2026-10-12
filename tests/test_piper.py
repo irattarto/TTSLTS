@@ -174,7 +174,7 @@ def test_controller_uses_piper_when_selected(monkeypatch):
     seen = {}
 
     class Fake:
-        def synthesize(self, text, speed):
+        def synthesize(self, text, speed, **_kw):
             seen["args"] = (text, speed)
             return np.ones(10, dtype=np.float32), 22050
 
@@ -187,3 +187,56 @@ def test_controller_explains_a_missing_voice(isolated_home):
     controller = Controller(Settings(tts_engine="piper", piper_voice="hu_HU-anna-medium"))
     with pytest.raises(ValueError, match="Download Hungarian voices"):
         controller.piper()
+
+
+# --- Hungarian text clean-up ----------------------------------------------------------------
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        ("Ez kb. 3 kg.", "Ez körülbelül 3 kilogramm."),
+        ("pl. dr. Kovács", "például doktor Kovács"),
+        ("Dr. Kovács és stb.", "Doktor Kovács és és így tovább."),
+        ("Budapest, 1. ker. és 12. fejezet", "Budapest, első kerület és 12. fejezet"),
+        ("25 °C, 12km, 30 cm", "25 Celsius-fok, 12 kilométer, 30 centiméter"),
+        ("Kovács & Társa", "Kovács és Társa"),
+        ("A tv. nem változik, 5 db", "A tv. nem változik, 5 darab"),
+        ("2026. október 12.", "2026. október 12."),
+    ],
+)
+def test_hungarian_abbreviations_are_expanded(text, expected):
+    from ttslts.tts.hu_text import normalize_hungarian
+
+    assert normalize_hungarian(text) == expected
+
+
+def test_variation_controls_reach_the_model():
+    session = FakeSession()
+    voice = make_voice(session)
+    voice.synthesize("ab", speed=1.0, noise_scale=0.3, noise_w=1.1)
+    np.testing.assert_allclose(session.calls[0]["scales"], [0.3, 1.0, 1.1])
+
+
+def test_hungarian_voices_expand_abbreviations_before_speaking(monkeypatch):
+    voice = make_voice()
+    seen = []
+    monkeypatch.setattr(voice, "phonemize", lambda s: seen.append(s) or ["a"])
+    voice.synthesize("Ez kb. 3 kg.")
+    assert seen == ["Ez körülbelül 3 kilogramm."]
+
+
+def test_controller_passes_the_naturalness_settings(monkeypatch):
+    controller = Controller(
+        Settings(tts_engine="piper", piper_variation=0.4, piper_rhythm=1.0), save=lambda s: None
+    )
+    seen = {}
+
+    class Fake:
+        def synthesize(self, text, speed, **kw):
+            seen.update(kw)
+            return np.ones(4, dtype=np.float32), 22050
+
+    monkeypatch.setattr(controller, "piper", lambda: Fake())
+    controller.render_tts("Szia")
+    assert seen == {"noise_scale": 0.4, "noise_w": 1.0}
