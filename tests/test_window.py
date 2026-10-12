@@ -159,3 +159,62 @@ def test_piper_download_needs_consent(make_window, monkeypatch, accept):
 
     assert "CC0" in seen["text"] and "research" in seen["text"]
     assert started == ([True] if accept else [])
+
+
+def _pick_language(w, code):
+    w.lang_combo.setCurrentIndex(w.lang_combo.findData(code))
+
+
+def test_choosing_hungarian_switches_to_piper_and_offers_the_download(make_window, monkeypatch):
+    from PySide6.QtCore import QTimer
+
+    from ttslts.tts import piper_download
+
+    monkeypatch.setattr(piper_download, "installed_voices", lambda base=None: [])
+    w = make_window()
+    offered = []
+    monkeypatch.setattr(w, "_download_piper", lambda: offered.append(True))
+    # run the deferred offer immediately instead of waiting for the event loop
+    monkeypatch.setattr(QTimer, "singleShot", staticmethod(lambda _ms, fn: fn()))
+
+    _pick_language(w, "hu")
+
+    assert w.settings.tts_engine == "piper" and w.settings.tts_lang == "hu"
+    assert offered == [True]
+
+
+def test_no_download_offer_when_voices_are_installed(make_window, monkeypatch):
+    from PySide6.QtCore import QTimer
+
+    from ttslts.tts import piper_download
+
+    monkeypatch.setattr(piper_download, "installed_voices", lambda base=None: ["hu_HU-anna-medium"])
+    w = make_window()
+    offered = []
+    monkeypatch.setattr(w, "_download_piper", lambda: offered.append(True))
+    monkeypatch.setattr(QTimer, "singleShot", staticmethod(lambda _ms, fn: fn()))
+
+    _pick_language(w, "hu")
+
+    assert w.settings.tts_engine == "piper" and offered == []
+
+
+def test_other_languages_stay_on_kokoro(make_window):
+    w = make_window()
+    _pick_language(w, "it")
+    assert w.settings.tts_engine == "kokoro" and w.settings.tts_lang == "it"
+
+
+def test_engine_can_be_set_back_to_kokoro_for_experimental_hungarian(make_window, monkeypatch):
+    from ttslts.tts import piper_download
+
+    monkeypatch.setattr(piper_download, "installed_voices", lambda base=None: ["hu_HU-anna-medium"])
+    w = make_window()
+    _pick_language(w, "hu")
+    assert w.settings.tts_engine == "piper"
+
+    w.engine_combo.setCurrentIndex(w.engine_combo.findData("kokoro"))
+
+    # the user's choice sticks: Kokoro keeps speaking Hungarian (experimental)
+    assert w.settings.tts_engine == "kokoro" and w.settings.tts_lang == "hu"
+    assert w._tts_form.isRowVisible(w.lang_combo)

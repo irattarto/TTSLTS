@@ -10,13 +10,14 @@ import java.net.URL
 import org.apache.commons.compress.archivers.tar.TarArchiveInputStream
 import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
 
-/** Downloads and locates the Kokoro model files (sherpa-onnx packaging, 53 voices). */
+/** Downloads and locates model files from the sherpa-onnx `tts-models` release. */
 object ModelStore {
-    private const val MODEL_DIR = "kokoro-multi-lang-v1_0"
-    private const val URL =
-        "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models/$MODEL_DIR.tar.bz2"
+    private const val BASE_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models"
+    private const val KOKORO_DIR = "kokoro-multi-lang-v1_0"
 
-    fun modelDir(context: Context): File = File(context.filesDir, "models/$MODEL_DIR")
+    /** Where the model in the archive named [dirName] is unpacked. */
+    fun modelDir(context: Context, dirName: String = KOKORO_DIR): File =
+        File(context.filesDir, "models/$dirName")
 
     fun isInstalled(context: Context): Boolean {
         val dir = modelDir(context)
@@ -26,18 +27,27 @@ object ModelStore {
             File(dir, "espeak-ng-data").isDirectory
     }
 
+    /** Kokoro: downloads the multi-language model (several hundred MB). */
+    fun download(context: Context, onProgress: (Long, Long) -> Unit) =
+        downloadArchive(context, KOKORO_DIR, "model.onnx", onProgress)
+
     /**
-     * Downloads the archive and unpacks it while streaming, so no temporary copy of the
-     * archive is stored. Blocking; call from a background thread. [onProgress] gets
+     * Downloads the archive [dirName].tar.bz2 and unpacks it while streaming, so no temporary
+     * copy of the archive is stored. Blocking; call from a background thread. [onProgress] gets
      * (downloaded bytes, total bytes or -1 when unknown).
      */
-    fun download(context: Context, onProgress: (Long, Long) -> Unit) {
+    fun downloadArchive(
+        context: Context,
+        dirName: String,
+        requiredFile: String,
+        onProgress: (Long, Long) -> Unit,
+    ) {
         val root = File(context.filesDir, "models")
         val staging = File(root, ".staging")
         staging.deleteRecursively()
         staging.mkdirs()
 
-        val connection = (URL(URL).openConnection() as HttpURLConnection).apply {
+        val connection = (URL("$BASE_URL/$dirName.tar.bz2").openConnection() as HttpURLConnection).apply {
             connectTimeout = 20_000
             readTimeout = 30_000
             instanceFollowRedirects = true
@@ -72,12 +82,12 @@ object ModelStore {
             connection.disconnect()
         }
 
-        val extracted = File(staging, MODEL_DIR)
-        if (!File(extracted, "model.onnx").isFile) {
+        val extracted = File(staging, dirName)
+        if (!File(extracted, requiredFile).isFile) {
             staging.deleteRecursively()
-            throw IOException("The downloaded archive does not contain $MODEL_DIR/model.onnx")
+            throw IOException("The downloaded archive does not contain $dirName/$requiredFile")
         }
-        val dest = modelDir(context)
+        val dest = modelDir(context, dirName)
         dest.deleteRecursively()
         if (!extracted.renameTo(dest)) {
             staging.deleteRecursively()

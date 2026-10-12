@@ -104,9 +104,7 @@ class MainWindow(QMainWindow):
         for code, label in LANGUAGES.items():
             self.lang_combo.addItem(label, code)
         self.lang_combo.setCurrentIndex(max(0, self.lang_combo.findData(s.tts_lang)))
-        self.lang_combo.currentIndexChanged.connect(
-            lambda i: self._set("tts_lang", self.lang_combo.itemData(i))
-        )
+        self.lang_combo.currentIndexChanged.connect(self._on_language_changed)
         form.addRow("Language", self.lang_combo)
         self._tts_form = form
 
@@ -334,6 +332,18 @@ class MainWindow(QMainWindow):
     def _on_engine_changed(self, _index: int) -> None:
         self._set("tts_engine", self.engine_combo.currentData())
         self._apply_engine()
+
+    def _on_language_changed(self, index: int) -> None:
+        code = self.lang_combo.itemData(index)
+        self._set("tts_lang", code)
+        # Piper has real Hungarian voices, so it is the default for Hungarian. Only a language
+        # change switches; the engine can still be set back to Kokoro by hand afterwards.
+        if code == "hu" and self.settings.tts_engine == "kokoro":
+            self.engine_combo.setCurrentIndex(self.engine_combo.findData("piper"))
+            from ttslts.tts import piper_download
+
+            if not piper_download.installed_voices():
+                QTimer.singleShot(0, self._download_piper)
 
     def _apply_engine(self) -> None:
         piper = self.settings.tts_engine == "piper"
