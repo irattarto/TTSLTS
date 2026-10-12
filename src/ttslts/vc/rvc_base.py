@@ -68,6 +68,7 @@ def _fetch(
     name: str,
     target: Path,
     progress: Callable[[str, int, int], None] | None,
+    sizes: dict[str, int | None] | None = None,
 ) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     tmp = target.with_suffix(target.suffix + ".part")
@@ -80,7 +81,7 @@ def _fetch(
             done += len(chunk)
             if progress:
                 progress(Path(name).name, done, total)
-    expected = FILES.get(name)
+    expected = (FILES if sizes is None else sizes).get(name)
     if expected is not None and tmp.stat().st_size != expected:
         size = tmp.stat().st_size
         tmp.unlink(missing_ok=True)

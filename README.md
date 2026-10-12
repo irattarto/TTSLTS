@@ -4,8 +4,9 @@ An offline system tray app for Windows with two features:
 
 - **Text to speech** with [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0), 54 preset voices in 9 languages.
 - **Real-time voice changing** with [RVC v2](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI) (MIT) voice models.
+- **Training your own voice** from mp3 or wav recordings, saved as an RVC v2 `.pth` and an `.onnx` file (run from source, needs PyTorch).
 
-Everything runs locally through ONNX Runtime. Nothing is sent over the network except the one-time Kokoro model download.
+Everything runs locally through ONNX Runtime (training uses PyTorch). Nothing is sent over the network except the one-time model downloads.
 
 ## Install
 
@@ -63,6 +64,24 @@ Then on the **Voice Changer** tab pick your microphone and output and press **St
 
 Latency is roughly chunk size + crossfade + processing time. Lower **Chunk size** for less delay, raise it if the voice crackles. **Context** is how much earlier audio the model sees each time (more is smoother but slower). The **Processing** readout should stay well under the chunk size.
 
+### Train your own voice
+
+The **Train** tab makes an RVC v2 voice from recordings of one speaker. It is not part of the packaged installers: run the app from source and install the training extras (PyTorch is only used for training; everything else stays on ONNX Runtime):
+
+```bat
+:: NVIDIA GPU: install the CUDA build of PyTorch first (training on a CPU takes many hours)
+pip install torch --index-url https://download.pytorch.org/whl/cu126
+pip install -e .[train]
+```
+
+1. Settings > Models > **Download ContentVec + RMVPE** (once, also needed by the voice changer).
+2. On the **Train** tab add your recordings (mp3, wav, flac, ogg). Use clean speech of one person without music or noise; about 10 minutes gives a good voice and 2-3 minutes already works.
+3. Give the voice a name, pick the sample rate (40 kHz is the usual choice), epochs (100-300 for a few minutes of audio) and batch size (lower it if the GPU runs out of memory), then **Start training**. The first time you are asked to accept the terms and download the pretrained RVC v2 models (about 215 MB) that training starts from.
+4. Training cuts the recordings at pauses, extracts ContentVec features and pitch, and fine-tunes the pretrained model. The voice file is refreshed every *Save every* epochs, so you can try it before training ends. **Stop** saves and ends early; starting the same name again offers to continue where it stopped.
+5. The result is saved to `%APPDATA%\TTSLTS\voices\<name>\` as `<name>.pth` (the format voices are shared in, works in other RVC tools) and `<name>.onnx`. **Use this voice** selects it for the voice changer and for *Speak with my voice model*.
+
+Training runs in a separate process (`python -m ttslts.train.run`); its log is `%APPDATA%\TTSLTS\train\<name>\train.log`. Only train on voices you have permission to use.
+
 ## Development
 
 ```bash
@@ -83,12 +102,14 @@ src/ttslts/
   vc/rvc.py         RVC v2 ONNX inference (ContentVec + pitch + voice model)
   vc/rvc_pth.py     .pth voice checkpoint -> ONNX importer (no PyTorch needed)
   vc/realtime.py    chunked streaming conversion with crossfades
+  train/            voice training: prepare.py (cut clips, features), trainer.py (loop), run.py (job process)
+  train/rvc_model/  original RVC network code (MIT, see its LICENSE), used only for training
   ui/               main window, tray icon and menu
 ```
 
 ## Licenses and consent
 
-Kokoro is Apache-2.0 and RVC is MIT, so both are usable commercially, but check the license of each voice model you use. Only clone voices you have permission to use.
+Kokoro is Apache-2.0 and RVC is MIT, so both are usable commercially, but check the license of each voice model you use. The pretrained models used for training carry the RVC author's research-use clause (shown when you download them), and `train/rvc_model/` is RVC's MIT-licensed model code. Only clone voices you have permission to use.
 
 ## Android app (text to speech only)
 

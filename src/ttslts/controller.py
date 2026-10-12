@@ -2,13 +2,19 @@
 
 from __future__ import annotations
 
+import json
 import logging
+import os
+import subprocess
+import sys
 import threading
 from collections.abc import Callable
+from pathlib import Path
 
 import numpy as np
 from PySide6.QtCore import QObject, Signal
 
+from ttslts import paths
 from ttslts.audio import devices
 from ttslts.audio.dsp import resample
 from ttslts.audio.wav import write_wav
@@ -29,6 +35,12 @@ class Controller(QObject):
     kokoroDownloaded = Signal(str, str)
     rvcBaseDownloaded = Signal(str, str)
     piperDownloaded = Signal(list)
+    pretrainedDownloaded = Signal(int)
+    trainRunning = Signal(bool)
+    trainStage = Signal(str)
+    trainProgress = Signal(dict)
+    trainSaved = Signal(str, int)
+    trainFinished = Signal(str, str, bool)  # .pth, .onnx, finished (False: stopped early)
 
     def __init__(self, settings: Settings, save: Callable[[Settings], None] | None = None):
         super().__init__()
@@ -42,6 +54,8 @@ class Controller(QObject):
         self._piper = None
         self._piper_key = None
         self._vc = None
+        self._train_proc: subprocess.Popen | None = None
+        self._train_work: Path | None = None
 
     # -- settings --------------------------------------------------------
     def save_settings(self) -> None:
@@ -155,6 +169,175 @@ class Controller(QObject):
 
         self._background(work, "download-rvc-base")
 
+    def download_pretrained(self, sample_rate: int) -> None:
+        """Fetch the pretrained voice models training starts from. Call only after consent."""
+        from ttslts.train import pretrained
+
+        def progress(name, done, total):
+            pct = f" {done * 100 // total}%" if total else ""
+            self.status.emit(f"Downloading {name}{pct}")
+
+        def work():
+            pretrained.download(sample_rate, progress)
+            self.pretrainedDownloaded.emit(sample_rate)
+            self.status.emit("Pretrained voice models ready")
+
+        self._background(work, "download-pretrained")
+
+    # -- training --------------------------------------------------------
+    @staticmethod
+    def training_unavailable_reason() -> str:
+        """Why training cannot run in this install, or "" if it can."""
+        import importlib.util
+
+        if getattr(sys, "frozen", False):
+            return (
+                "Training is not part of the packaged app. Run TTSLTS from source with "
+                "pip install -e .[train] to train voices."
+            )
+        if importlib.util.find_spec("torch") is None:
+            return "Training needs PyTorch. Install it with: pip install -e .[train]"
+        if importlib.util.find_spec("soundfile") is None:
+            return "Reading mp3 files needs the soundfile package: pip install -e .[train]"
+        return ""
+
+    @staticmethod
+    def _train_python() -> str:
+        exe = Path(sys.executable)
+        if exe.name.lower() == "pythonw.exe":  # the child needs a stdout to report on
+            console = exe.with_name("python.exe")
+            if console.exists():
+                return str(console)
+        return str(exe)
+
+    @property
+    def training(self) -> bool:
+        return self._train_proc is not None and self._train_proc.poll() is None
+
+    def start_training(self, files: list[str], name: str, resume: bool) -> None:
+        """Train a voice from the recordings in ``files`` (see ``Settings.train_*``)."""
+        from ttslts.train import hparams, pretrained
+
+        s = self.settings
+        if self.training:
+            return
+        reason = self.training_unavailable_reason()
+        if reason:
+            self.error.emit(reason)
+            return
+        if not files and not resume:
+            self.error.emit("Add at least one recording (mp3 or wav) to train on.")
+            return
+        if not s.contentvec_path or not Path(s.contentvec_path).exists():
+            self.error.emit(
+                "Training needs ContentVec (Settings > Models > Download ContentVec + RMVPE)."
+            )
+            return
+        if s.train_sample_rate not in hparams.SAMPLE_RATES:
+            self.error.emit(f"Unsupported sample rate {s.train_sample_rate}")
+            return
+        g_path, d_path = pretrained.paths_for(s.train_sample_rate)
+        if not (g_path.exists() and d_path.exists()):
+            self.error.emit("The pretrained voice models are not downloaded yet.")
+            return
+
+        work = paths.train_dir() / name
+        job = {
+            "name": name,
+            "files": files,
+            "sample_rate": s.train_sample_rate,
+            "epochs": s.train_epochs,
+            "batch_size": s.train_batch_size,
+            "save_every": s.train_save_every,
+            "work_dir": str(work),
+            "out_dir": str(paths.voices_dir() / name),
+            "use_gpu": s.use_gpu,
+            "fp16": True,
+            "contentvec_path": s.contentvec_path,
+            "rmvpe_path": s.rmvpe_path,
+            "pretrained_g": str(g_path),
+            "pretrained_d": str(d_path),
+            "resume": resume,
+        }
+        work.mkdir(parents=True, exist_ok=True)
+        job_file = work / "job.json"
+        job_file.write_text(json.dumps(job, indent=2), encoding="utf-8")
+        log_file = open(work / "train.log", "w", encoding="utf-8")  # closed by the reader thread
+        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        try:
+            proc = subprocess.Popen(
+                [self._train_python(), "-u", "-m", "ttslts.train.run", str(job_file)],
+                stdout=subprocess.PIPE,
+                stderr=log_file,
+                text=True,
+                encoding="utf-8",
+                creationflags=flags,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+            )
+        except OSError as exc:
+            log_file.close()
+            self.error.emit(f"Could not start training: {exc}")
+            return
+        self._train_proc, self._train_work = proc, work
+        self.trainRunning.emit(True)
+        threading.Thread(
+            target=self._read_training, args=(proc, log_file, work), daemon=True, name="train"
+        ).start()
+
+    def _read_training(self, proc: subprocess.Popen, log_file, work: Path) -> None:
+        last_error = ""
+        ended = False
+        try:
+            for line in proc.stdout:
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                kind = event.get("type")
+                if kind == "stage":
+                    self.trainStage.emit(event.get("text", ""))
+                elif kind == "progress":
+                    self.trainProgress.emit(event)
+                elif kind == "saved":
+                    self.trainSaved.emit(event["pth"], int(event["epoch"]))
+                elif kind in ("done", "stopped"):
+                    ended = True
+                    self.trainFinished.emit(
+                        event.get("pth", ""), event.get("onnx", ""), kind == "done"
+                    )
+                elif kind == "error":
+                    last_error = event.get("message", "")
+            proc.wait()
+        finally:
+            log_file.close()
+            self._train_proc = None
+            self.trainRunning.emit(False)
+        if not ended:
+            self.error.emit(
+                f"Training stopped: {last_error or 'the training process ended unexpectedly'}"
+                f"\n\nDetails: {work / 'train.log'}"
+            )
+
+    def stop_training(self) -> None:
+        """Ask training to stop after saving; ends the process if it does not respond."""
+        proc, work = self._train_proc, self._train_work
+        if proc is None or work is None or proc.poll() is not None:
+            return
+        try:
+            (work / "STOP").write_text("stop", encoding="utf-8")
+        except OSError:
+            proc.terminate()
+            return
+        self.trainStage.emit("Stopping after saving…")
+
+        def force():
+            try:
+                proc.wait(timeout=90)
+            except subprocess.TimeoutExpired:
+                proc.terminate()
+
+        threading.Thread(target=force, daemon=True, name="train-stop").start()
+
     # -- text to speech --------------------------------------------------
     def render_tts(self, text: str) -> tuple[np.ndarray, int]:
         s = self.settings
@@ -258,5 +441,8 @@ class Controller(QObject):
             self.start_vc()
 
     def shutdown(self) -> None:
+        proc = self._train_proc
+        if proc is not None and proc.poll() is None:
+            proc.terminate()  # the last periodic checkpoint is kept for resuming
         self.stop_vc()
         self.stop_speaking()
