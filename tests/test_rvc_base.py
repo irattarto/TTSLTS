@@ -6,8 +6,8 @@ from pathlib import Path
 import numpy as np
 import pytest
 from scipy.special import erf
+from torch_fixture import write_checkpoint
 
-from tests.torch_fixture import write_checkpoint
 from ttslts.vc import hubert_onnx, rmvpe_mel, rvc_base
 from ttslts.vc.torch_zip import load_state_dict
 
