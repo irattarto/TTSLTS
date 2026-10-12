@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+CHECKPOINT = "checkpoint.pt"  # resumable training state in a work folder
 SEGMENT_SAMPLES = 12800  # audio samples the generator is trained on per example
 INTER_CHANNELS = 192
 HIDDEN_CHANNELS = 192

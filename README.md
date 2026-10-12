@@ -4,7 +4,7 @@ An offline system tray app for Windows with two features:
 
 - **Text to speech** with [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0), 54 preset voices in 9 languages.
 - **Real-time voice changing** with [RVC v2](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI) (MIT) voice models.
-- **Training your own voice** from mp3 or wav recordings, saved as an RVC v2 `.pth` and an `.onnx` file (run from source, needs PyTorch).
+- **Training your own voice** from mp3 or wav recordings, saved as an RVC v2 `.pth` and an `.onnx` file (PyTorch is set up on first use).
 
 Everything runs locally through ONNX Runtime (training uses PyTorch). Nothing is sent over the network except the one-time model downloads.
 
@@ -66,13 +66,7 @@ Latency is roughly chunk size + crossfade + processing time. Lower **Chunk size*
 
 ### Train your own voice
 
-The **Train** tab makes an RVC v2 voice from recordings of one speaker. It is not part of the packaged installers: run the app from source and install the training extras (PyTorch is only used for training; everything else stays on ONNX Runtime):
-
-```bat
-:: NVIDIA GPU: install the CUDA build of PyTorch first (training on a CPU takes many hours)
-pip install torch --index-url https://download.pytorch.org/whl/cu126
-pip install -e .[train]
-```
+The **Train** tab makes an RVC v2 voice from recordings of one speaker, in the installed app as well as from source. PyTorch is too big to ship in the installers (the CUDA build is several GB), so the first time you press **Start training** the app asks, then sets up its own private environment in `%APPDATA%\TTSLTS\runtime` (Python from python.org, PyTorch and a few packages; about 3 GB with an NVIDIA GPU, 0.5 GB without; training on a CPU takes many hours). Delete that folder to remove it. Running from source with PyTorch already installed (`pip install -e .[train]`) uses that instead and downloads nothing.
 
 1. Settings > Models > **Download ContentVec + RMVPE** (once, also needed by the voice changer).
 2. On the **Train** tab add your recordings (mp3, wav, flac, ogg). Use clean speech of one person without music or noise; about 10 minutes gives a good voice and 2-3 minutes already works.
@@ -80,7 +74,7 @@ pip install -e .[train]
 4. Training cuts the recordings at pauses, extracts ContentVec features and pitch, and fine-tunes the pretrained model. The voice file is refreshed every *Save every* epochs, so you can try it before training ends. **Stop** saves and ends early; starting the same name again offers to continue where it stopped.
 5. The result is saved to `%APPDATA%\TTSLTS\voices\<name>\` as `<name>.pth` (the format voices are shared in, works in other RVC tools) and `<name>.onnx`. **Use this voice** selects it for the voice changer and for *Speak with my voice model*.
 
-Training runs in a separate process (`python -m ttslts.train.run`); its log is `%APPDATA%\TTSLTS\train\<name>\train.log`. Only train on voices you have permission to use.
+Training runs in a separate process (`python -m ttslts.train.run`, from the app's bundled sources in the installed app); its log is `%APPDATA%\TTSLTS\train\<name>\train.log`. Only train on voices you have permission to use.
 
 ## Development
 
