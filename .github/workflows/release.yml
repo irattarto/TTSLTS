@@ -96,11 +96,15 @@ jobs:
           version="${VERSION#v}"
           ./packaging/linux/build-deb.sh dist/TTSLTS icons/ttslts.png "$version" "ttslts_${version}_amd64.deb"
       - name: Install the package and run it
+        timeout-minutes: 10
         run: |
-          sudo apt-get install -y ./ttslts_*_amd64.deb
-          ttslts --version
+          set -x
+          sudo -E timeout 300 apt-get install -y --no-install-recommends ./ttslts_*_amd64.deb
           test -f /usr/share/applications/ttslts.desktop
+          timeout 60 ttslts --version
         env:
+          DEBIAN_FRONTEND: noninteractive
+          NEEDRESTART_MODE: a
           QT_QPA_PLATFORM: offscreen
       - uses: actions/upload-artifact@v4
         with:
