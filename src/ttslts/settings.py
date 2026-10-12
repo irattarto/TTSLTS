@@ -31,6 +31,8 @@ class Settings:
     tts_speed: float = 1.0
     tts_lang: str = "en-us"
     tts_through_rvc: bool = False
+    tts_engine: str = "kokoro"  # "kokoro" or "piper"
+    piper_voice: str = ""
 
     # Voice changer (RVC v2)
     rvc_model_path: str = ""

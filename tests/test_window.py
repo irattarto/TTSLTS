@@ -125,3 +125,37 @@ def test_downloaded_rvc_base_paths_are_saved(make_window):
     assert w.settings.contentvec_path == "/m/contentvec.onnx"
     assert w.settings.rmvpe_path == "/m/rmvpe.onnx"
     assert w.contentvec_edit.text() == "/m/contentvec.onnx" and w.saved
+
+
+def test_engine_choice_switches_the_visible_rows(make_window):
+    w = make_window()
+    form = w._tts_form
+    assert form.isRowVisible(w.voice_combo) and not form.isRowVisible(w.piper_combo)
+    w.engine_combo.setCurrentIndex(w.engine_combo.findData("piper"))
+    assert w.settings.tts_engine == "piper"
+    assert form.isRowVisible(w.piper_combo)
+    assert not form.isRowVisible(w.voice_combo) and not form.isRowVisible(w.lang_combo)
+
+
+def test_installed_piper_voices_are_listed(make_window, monkeypatch):
+    from ttslts.tts import piper_download
+
+    monkeypatch.setattr(piper_download, "installed_voices", lambda base=None: ["hu_HU-imre-medium"])
+    w = make_window(tts_engine="piper")
+    assert [w.piper_combo.itemData(i) for i in range(w.piper_combo.count())] == [
+        "hu_HU-imre-medium"
+    ]
+    assert w.settings.piper_voice == "hu_HU-imre-medium"
+
+
+@pytest.mark.parametrize("accept", [True, False])
+def test_piper_download_needs_consent(make_window, monkeypatch, accept):
+    w = make_window()
+    started = []
+    monkeypatch.setattr(w.controller, "download_piper_voices", lambda: started.append(True))
+    seen = _answer_consent(monkeypatch, accept)
+
+    w._download_piper()
+
+    assert "CC0" in seen["text"] and "research" in seen["text"]
+    assert started == ([True] if accept else [])

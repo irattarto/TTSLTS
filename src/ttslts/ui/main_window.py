@@ -65,6 +65,7 @@ class MainWindow(QMainWindow):
         c.voicesLoaded.connect(self._on_voices)
         c.kokoroDownloaded.connect(self._on_kokoro_downloaded)
         c.rvcBaseDownloaded.connect(self._on_rvc_base_downloaded)
+        c.piperDownloaded.connect(self._on_piper_downloaded)
 
         if self.settings.kokoro_model_path and self.settings.kokoro_voices_path:
             QTimer.singleShot(0, controller.load_voices)
@@ -79,6 +80,20 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.text_edit, 1)
 
         form = QFormLayout()
+        self.engine_combo = QComboBox()
+        self.engine_combo.addItem("Kokoro (9 languages)", "kokoro")
+        self.engine_combo.addItem("Piper (Hungarian voices)", "piper")
+        self.engine_combo.setCurrentIndex(max(0, self.engine_combo.findData(s.tts_engine)))
+        self.engine_combo.currentIndexChanged.connect(self._on_engine_changed)
+        form.addRow("Engine", self.engine_combo)
+
+        self.piper_combo = QComboBox()
+        self.piper_combo.currentIndexChanged.connect(
+            lambda i: self._set("piper_voice", self.piper_combo.itemData(i) or "")
+        )
+        form.addRow("Hungarian voice", self.piper_combo)
+        self.piper_row = self.piper_combo
+
         self.voice_combo = QComboBox()
         self.voice_combo.setEditable(True)
         self.voice_combo.addItem(s.tts_voice)
@@ -93,6 +108,7 @@ class MainWindow(QMainWindow):
             lambda i: self._set("tts_lang", self.lang_combo.itemData(i))
         )
         form.addRow("Language", self.lang_combo)
+        self._tts_form = form
 
         self.speed_spin = QDoubleSpinBox(minimum=0.5, maximum=2.0, singleStep=0.05)
         self.speed_spin.setValue(s.tts_speed)
@@ -118,6 +134,8 @@ class MainWindow(QMainWindow):
         for b in (self.speak_btn, stop_btn, self.save_btn):
             buttons.addWidget(b)
         layout.addLayout(buttons)
+        self._refresh_piper_voices()
+        self._apply_engine()
         return w
 
     def _build_vc_tab(self) -> QWidget:
@@ -192,6 +210,12 @@ class MainWindow(QMainWindow):
         self.rvc_model_edit = self._path_row(ml, "RVC v2 voice", "rvc_model_path", "ONNX (*.onnx)")
         self.contentvec_edit = self._path_row(ml, "ContentVec", "contentvec_path", "ONNX (*.onnx)")
         self.rmvpe_edit = self._path_row(ml, "RMVPE (optional)", "rmvpe_path", "ONNX (*.onnx)")
+        piper_dl = QPushButton("Download Hungarian voices (Piper, ~190 MB)")
+        piper_dl.setToolTip(
+            "From the original Piper voice collection; asks you to accept its terms first"
+        )
+        piper_dl.clicked.connect(self._download_piper)
+        ml.addRow("", piper_dl)
         rvc_dl = QPushButton("Download ContentVec + RMVPE (~550 MB)")
         rvc_dl.setToolTip("From the original RVC project; asks you to accept its terms first")
         rvc_dl.clicked.connect(self._download_rvc_base)
@@ -294,6 +318,52 @@ class MainWindow(QMainWindow):
 
     def _on_latency(self, ms: float) -> None:
         self.latency_label.setText(f"Processing: {ms:.0f} ms per chunk")
+
+    # -- TTS engine ------------------------------------------------------
+    def _on_engine_changed(self, _index: int) -> None:
+        self._set("tts_engine", self.engine_combo.currentData())
+        self._apply_engine()
+
+    def _apply_engine(self) -> None:
+        piper = self.settings.tts_engine == "piper"
+        form = self._tts_form
+        form.setRowVisible(self.piper_combo, piper)
+        form.setRowVisible(self.voice_combo, not piper)
+        form.setRowVisible(self.lang_combo, not piper)
+
+    def _refresh_piper_voices(self) -> None:
+        from ttslts.tts import piper_download
+
+        installed = piper_download.installed_voices()
+        self.piper_combo.blockSignals(True)
+        self.piper_combo.clear()
+        for voice_id in installed:
+            self.piper_combo.addItem(piper_download.display_name(voice_id), voice_id)
+        if not installed:
+            self.piper_combo.addItem("None installed (Settings > Models > Download)", "")
+        self.piper_combo.blockSignals(False)
+        idx = self.piper_combo.findData(self.settings.piper_voice)
+        self.piper_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        # keep the saved choice in step with what is actually installed
+        self.settings.piper_voice = self.piper_combo.currentData() or ""
+
+    def _download_piper(self) -> None:
+        from ttslts.tts import piper_download
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(piper_download.CONSENT_TITLE)
+        box.setText("Download the Hungarian voices?")
+        box.setInformativeText(piper_download.CONSENT_TEXT)
+        accept = box.addButton("I accept, download", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        if box.clickedButton() is accept:
+            self.controller.download_piper_voices()
+
+    def _on_piper_downloaded(self, _installed: list) -> None:
+        self._refresh_piper_voices()
+        self.controller.save_settings()
 
     def _on_voices(self, voices: list) -> None:
         current = self.settings.tts_voice
