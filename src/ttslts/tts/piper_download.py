@@ -37,11 +37,21 @@ VOICES: dict[str, tuple[str, str, dict[str, int]]] = {
 }
 
 # What to expect from each voice, shown as hover help. All three are single-speaker, 22.05 kHz,
-# medium-quality voices; the pitch notes are measured on a test sentence in CI.
+# medium-quality voices; the pitch figures are the median speaking pitch measured in CI on a test
+# sentence at normal speed.
 VOICE_NOTES: dict[str, str] = {
-    "hu_HU-anna-medium": "Hungarian voice, medium quality.",
-    "hu_HU-berta-medium": "Hungarian voice, medium quality.",
-    "hu_HU-imre-medium": "Hungarian voice, medium quality.",
+    "hu_HU-anna-medium": (
+        "higher-pitched voice (about 175 Hz when speaking), very close to Berta. "
+        "Hungarian, medium quality."
+    ),
+    "hu_HU-berta-medium": (
+        "higher-pitched voice (about 170 Hz when speaking), very close to Anna. "
+        "Hungarian, medium quality."
+    ),
+    "hu_HU-imre-medium": (
+        "lower-pitched voice (about 115 Hz when speaking), the deepest of the three. "
+        "Hungarian, medium quality."
+    ),
 }
 
 HELP_ENGINE = (

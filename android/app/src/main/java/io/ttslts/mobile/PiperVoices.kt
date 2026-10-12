@@ -4,16 +4,16 @@ import android.content.Context
 import java.io.File
 
 /** A Hungarian Piper voice as packaged by sherpa-onnx (`vits-piper-<id>`). */
-data class PiperVoiceInfo(val id: String, val name: String) {
+data class PiperVoiceInfo(val id: String, val name: String, val note: String) {
     val dirName: String get() = "vits-piper-$id"
     val modelFile: String get() = "$id.onnx"
 }
 
 object PiperVoices {
     val all = listOf(
-        PiperVoiceInfo("hu_HU-anna-medium", "Anna"),
-        PiperVoiceInfo("hu_HU-berta-medium", "Berta"),
-        PiperVoiceInfo("hu_HU-imre-medium", "Imre"),
+        PiperVoiceInfo("hu_HU-anna-medium", "Anna", "higher pitch, about 175 Hz"),
+        PiperVoiceInfo("hu_HU-berta-medium", "Berta", "higher pitch, about 170 Hz"),
+        PiperVoiceInfo("hu_HU-imre-medium", "Imre", "lower pitch, about 115 Hz"),
     )
 
     // Help texts (long-press a setting to see them) and a visible tip for the Piper engine.

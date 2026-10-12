@@ -291,7 +291,8 @@ class MainActivity : ComponentActivity() {
 
     private fun populatePiperVoices() {
         val labels = PiperVoices.all.map { v ->
-            if (PiperVoices.isInstalled(this, v)) v.name else "${v.name} (not downloaded)"
+            val label = "${v.name} - ${v.note}"
+            if (PiperVoices.isInstalled(this, v)) label else "$label (not downloaded)"
         }
         voice.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, labels)
         voice.setSelection(piperIndex.coerceIn(0, labels.lastIndex))
