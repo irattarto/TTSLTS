@@ -54,7 +54,7 @@ You supply the models (they are never bundled or committed):
 
 | Field | File | Notes |
 |---|---|---|
-| RVC v2 voice | your voice model exported to ONNX | Export from RVC WebUI (its *Export Onnx* tab) or the w-okada voice changer. Both input layouts are supported, as are fp16 exports. |
+| RVC v2 voice | a downloaded `.pth` voice, or an `.onnx` export | The `.pth` file that voices are shared as works directly: the first use converts it to ONNX on your computer (a few seconds, cached). Only **v2** voices with pitch work (the title or model card says v2; 768-dim). Older `.onnx` exports from RVC WebUI / w-okada also work, in both input layouts and fp16. |
 | ContentVec | `vec-768-layer-12.onnx` (or another 768-dim ContentVec/HuBERT ONNX) | RVC v2 models use 768-dim features. |
 | RMVPE (optional) | `rmvpe.onnx` from the w-okada voice changer | Better pitch tracking. Without it, a built-in YIN pitch tracker is used. |
 | RVC sample rate | 32/40/48 kHz | Only used when the ONNX file doesn't record its own rate (w-okada exports do). |
@@ -81,6 +81,7 @@ src/ttslts/
   audio/            DSP helpers (resampling, YIN pitch, crossfade), devices, WAV
   tts/              Kokoro engine and model download
   vc/rvc.py         RVC v2 ONNX inference (ContentVec + pitch + voice model)
+  vc/rvc_pth.py     .pth voice checkpoint -> ONNX importer (no PyTorch needed)
   vc/realtime.py    chunked streaming conversion with crossfades
   ui/               main window, tray icon and menu
 ```

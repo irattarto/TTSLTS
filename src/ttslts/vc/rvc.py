@@ -2,7 +2,8 @@
 
 Three models are involved; the voice model is the user's own:
 
-* the RVC v2 voice model, exported to ONNX (RVC WebUI or w-okada export),
+* the RVC v2 voice model, as ``.onnx`` (RVC WebUI / w-okada export) or the ``.pth`` checkpoint
+  that voices are shared as (converted once by ``rvc_pth``),
 * a ContentVec / HuBERT feature extractor in ONNX (768-dim, e.g. ``vec-768-layer-12.onnx``),
 * optionally an RMVPE pitch extractor in ONNX; without it a built-in YIN estimator is used.
 
@@ -151,7 +152,8 @@ class RvcModel:
             elif name in _SID:
                 feed[name] = np.array([speaker_id], dtype=np.int64)
             elif name in _NOISE:
-                feed[name] = np.random.randn(1, 192, n).astype(_np_dtype(inp.type))
+                channels = inp.shape[1] if inp.shape and isinstance(inp.shape[1], int) else 192
+                feed[name] = np.random.randn(1, channels, n).astype(_np_dtype(inp.type))
         return feed
 
     def convert(
@@ -178,6 +180,10 @@ def load_rvc(
         raise ValueError("No RVC voice model selected (Settings > Models)")
     if not contentvec_path:
         raise ValueError("No ContentVec model selected (Settings > Models)")
+    if model_path.lower().endswith(".pth"):
+        from ttslts.vc.rvc_pth import ensure_onnx
+
+        model_path = ensure_onnx(model_path)  # one-time conversion, cached
     contentvec = ContentVec(make_session(contentvec_path, use_gpu))
     pitch_fn = None
     if rmvpe_path:
