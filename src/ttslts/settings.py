@@ -48,6 +48,13 @@ class Settings:
     crossfade_ms: int = 40
     silence_threshold_db: float = -50.0
 
+    # Training a voice
+    train_name: str = "my-voice"
+    train_sample_rate: int = 40000
+    train_epochs: int = 200
+    train_batch_size: int = 8
+    train_save_every: int = 25
+
     # Runtime
     use_gpu: bool = True
 
