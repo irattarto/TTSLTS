@@ -14,6 +14,9 @@ LANGUAGES = {
     "es": "Spanish",
     "fr-fr": "French",
     "hi": "Hindi",
+    # Not a Kokoro language: no voice was trained on it. espeak-ng pronounces the text
+    # and an existing voice reads it, so expect a foreign accent.
+    "hu": "Hungarian (experimental, existing voices)",
     "it": "Italian",
     "ja": "Japanese",
     "pt-br": "Portuguese (BR)",

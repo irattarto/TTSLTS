@@ -17,16 +17,24 @@ import kotlin.math.max
 /** Wraps the sherpa-onnx Kokoro engine: streaming playback and WAV export. */
 class Speaker(private val context: Context) {
     private var tts: OfflineTts? = null
+    private var loadedLanguage: String? = null
 
     @Volatile
     private var stopRequested = false
 
     val numSpeakers: Int get() = tts?.numSpeakers() ?: 0
 
-    /** Loads the model (a few seconds). Blocking; call from a background thread. */
+    /**
+     * Loads the model (a few seconds). Blocking; call from a background thread.
+     *
+     * [language] is an espeak-ng voice such as "hu", or "" for the model's built-in English and
+     * Chinese lexicons. sherpa-onnx fixes it when the model is created, so changing it reloads.
+     */
     @Synchronized
-    fun load() {
-        if (tts != null) return
+    fun load(language: String = "") {
+        if (tts != null && loadedLanguage == language) return
+        tts?.release()
+        tts = null
         val dir = ModelStore.modelDir(context)
         fun existing(vararg names: String) =
             names.map { File(dir, it) }.filter { it.exists() }.joinToString(",") { it.absolutePath }
@@ -38,6 +46,7 @@ class Speaker(private val context: Context) {
             dataDir = File(dir, "espeak-ng-data").absolutePath,
             lexicon = existing("lexicon-us-en.txt", "lexicon-zh.txt"),
             dictDir = File(dir, "dict").takeIf { it.isDirectory }?.absolutePath ?: "",
+            lang = language,
         )
         val config = OfflineTtsConfig(
             model = OfflineTtsModelConfig(
@@ -49,6 +58,7 @@ class Speaker(private val context: Context) {
             ruleFsts = existing("phone-zh.fst", "date-zh.fst", "number-zh.fst"),
         )
         tts = OfflineTts(config = config)
+        loadedLanguage = language
     }
 
     fun stop() {
@@ -138,5 +148,6 @@ class Speaker(private val context: Context) {
     fun release() {
         tts?.release()
         tts = null
+        loadedLanguage = null
     }
 }

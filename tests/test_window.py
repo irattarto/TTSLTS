@@ -85,3 +85,43 @@ def test_tray_menu_builds(make_window):
     assert labels == ["Show window", "Voice changer", "Speak clipboard", "Stop speaking", "Quit"]
     w.controller.vcRunning.emit(True)
     assert tray.vc_action.isChecked()
+
+
+def _answer_consent(monkeypatch, accept: bool):
+    """Replace the modal consent box: record its text and click Accept or Cancel."""
+    from PySide6.QtWidgets import QMessageBox
+
+    seen = {}
+
+    def fake_exec(self):
+        seen["text"] = self.informativeText()
+        seen["title"] = self.windowTitle()
+
+    def fake_clicked(self):
+        buttons = self.buttons()
+        return buttons[0] if accept else buttons[-1]
+
+    monkeypatch.setattr(QMessageBox, "exec", fake_exec)
+    monkeypatch.setattr(QMessageBox, "clickedButton", fake_clicked)
+    return seen
+
+
+@pytest.mark.parametrize("accept", [True, False])
+def test_rvc_base_download_needs_consent(make_window, monkeypatch, accept):
+    w = make_window()
+    started = []
+    monkeypatch.setattr(w.controller, "download_rvc_base", lambda: started.append(True))
+    seen = _answer_consent(monkeypatch, accept)
+
+    w._download_rvc_base()
+
+    assert "research use only" in seen["text"] and "仅供研究使用" in seen["text"]
+    assert started == ([True] if accept else [])
+
+
+def test_downloaded_rvc_base_paths_are_saved(make_window):
+    w = make_window()
+    w._on_rvc_base_downloaded("/m/contentvec.onnx", "/m/rmvpe.onnx")
+    assert w.settings.contentvec_path == "/m/contentvec.onnx"
+    assert w.settings.rmvpe_path == "/m/rmvpe.onnx"
+    assert w.contentvec_edit.text() == "/m/contentvec.onnx" and w.saved

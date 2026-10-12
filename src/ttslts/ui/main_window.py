@@ -64,6 +64,7 @@ class MainWindow(QMainWindow):
         c.vcLatency.connect(self._on_latency)
         c.voicesLoaded.connect(self._on_voices)
         c.kokoroDownloaded.connect(self._on_kokoro_downloaded)
+        c.rvcBaseDownloaded.connect(self._on_rvc_base_downloaded)
 
         if self.settings.kokoro_model_path and self.settings.kokoro_voices_path:
             QTimer.singleShot(0, controller.load_voices)
@@ -191,6 +192,10 @@ class MainWindow(QMainWindow):
         self.rvc_model_edit = self._path_row(ml, "RVC v2 voice", "rvc_model_path", "ONNX (*.onnx)")
         self.contentvec_edit = self._path_row(ml, "ContentVec", "contentvec_path", "ONNX (*.onnx)")
         self.rmvpe_edit = self._path_row(ml, "RMVPE (optional)", "rmvpe_path", "ONNX (*.onnx)")
+        rvc_dl = QPushButton("Download ContentVec + RMVPE (~550 MB)")
+        rvc_dl.setToolTip("From the original RVC project; asks you to accept its terms first")
+        rvc_dl.clicked.connect(self._download_rvc_base)
+        ml.addRow("", rvc_dl)
         sr = QComboBox()
         for rate in (32000, 40000, 48000):
             sr.addItem(f"{rate // 1000} kHz", rate)
@@ -298,6 +303,27 @@ class MainWindow(QMainWindow):
         self.voice_combo.blockSignals(False)
         idx = self.voice_combo.findText(current)
         self.voice_combo.setCurrentIndex(idx if idx >= 0 else 0)
+
+    def _download_rvc_base(self) -> None:
+        from ttslts.vc import rvc_base
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(rvc_base.CONSENT_TITLE)
+        box.setText("Download the RVC base models?")
+        box.setInformativeText(rvc_base.CONSENT_TEXT)
+        accept = box.addButton("I accept, download", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        if box.clickedButton() is accept:
+            self.controller.download_rvc_base()
+
+    def _on_rvc_base_downloaded(self, contentvec: str, rmvpe: str) -> None:
+        self.contentvec_edit.setText(contentvec)
+        self.rmvpe_edit.setText(rmvpe)
+        self.settings.contentvec_path = contentvec
+        self.settings.rmvpe_path = rmvpe
+        self.controller.save_settings()
 
     def _on_kokoro_downloaded(self, model: str, voices: str) -> None:
         self.kokoro_model_edit.setText(model)

@@ -27,6 +27,7 @@ class Controller(QObject):
     vcLatency = Signal(float)
     voicesLoaded = Signal(list)
     kokoroDownloaded = Signal(str, str)
+    rvcBaseDownloaded = Signal(str, str)
 
     def __init__(self, settings: Settings, save: Callable[[Settings], None] | None = None):
         super().__init__()
@@ -101,6 +102,21 @@ class Controller(QObject):
             self.status.emit("Kokoro downloaded")
 
         self._background(work, "download-kokoro")
+
+    def download_rvc_base(self) -> None:
+        """Fetch ContentVec and RMVPE from the original RVC project. Call only after consent."""
+        from ttslts.vc import rvc_base
+
+        def progress(name, done, total):
+            pct = f" {done * 100 // total}%" if total else ""
+            self.status.emit(f"Downloading {name}{pct}")
+
+        def work():
+            contentvec, rmvpe = rvc_base.download_and_convert(progress, self.status.emit)
+            self.rvcBaseDownloaded.emit(str(contentvec), str(rmvpe))
+            self.status.emit("RVC base models ready")
+
+        self._background(work, "download-rvc-base")
 
     # -- text to speech --------------------------------------------------
     def render_tts(self, text: str) -> tuple[np.ndarray, int]:

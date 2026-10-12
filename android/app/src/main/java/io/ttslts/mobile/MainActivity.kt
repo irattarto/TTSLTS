@@ -7,6 +7,7 @@ import android.text.InputType
 import android.view.Gravity
 import android.view.View
 import android.view.ViewGroup
+import android.widget.AdapterView
 import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.EditText
@@ -30,6 +31,7 @@ class MainActivity : ComponentActivity() {
     private lateinit var progress: ProgressBar
     private lateinit var download: Button
     private lateinit var input: EditText
+    private lateinit var language: Spinner
     private lateinit var voice: Spinner
     private lateinit var speedLabel: TextView
     private lateinit var speed: SeekBar
@@ -39,6 +41,13 @@ class MainActivity : ComponentActivity() {
 
     private var busy = false
     private var ready = false
+
+    /** Label and sherpa-onnx espeak voice ("" keeps the model's built-in lexicons). */
+    private val languages = listOf(
+        "Default (English, Chinese and the model's other languages)" to "",
+        "Hungarian (experimental, existing voices)" to "hu",
+    )
+    private var selectedLanguage = ""
 
     private val saveWav =
         registerForActivityResult(ActivityResultContracts.CreateDocument("audio/wav")) { uri ->
@@ -100,6 +109,29 @@ class MainActivity : ComponentActivity() {
         column.addView(input, matchWidth().apply { topMargin = dp(12) })
 
         column.addView(TextView(this).apply {
+            text = "Language"
+            setPadding(0, dp(12), 0, 0)
+        })
+        language = Spinner(this).apply {
+            adapter = ArrayAdapter(
+                this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
+                languages.map { it.first },
+            )
+            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+                override fun onItemSelected(parent: AdapterView<*>?, v: View?, pos: Int, id: Long) {
+                    val code = languages[pos].second
+                    if (code != selectedLanguage) {
+                        selectedLanguage = code
+                        if (ready && !busy) loadModel()
+                    }
+                }
+
+                override fun onNothingSelected(parent: AdapterView<*>?) = Unit
+            }
+        }
+        column.addView(language, matchWidth())
+
+        column.addView(TextView(this).apply {
             text = "Voice"
             setPadding(0, dp(12), 0, 0)
         })
@@ -151,6 +183,7 @@ class MainActivity : ComponentActivity() {
         speak.isEnabled = enabled
         save.isEnabled = enabled
         voice.isEnabled = ready
+        language.isEnabled = ready && !busy
         stop.isEnabled = ready
     }
 
@@ -215,16 +248,22 @@ class MainActivity : ComponentActivity() {
         busy = true
         status.text = "Loading voice model…"
         refreshControls()
+        val code = selectedLanguage
         worker.execute {
             try {
-                speaker.load()
+                speaker.load(code)
                 val labels = Voices.labels(speaker.numSpeakers)
                 runOnUiThread {
+                    val previous = voice.selectedItemPosition
                     voice.adapter = ArrayAdapter(
                         this, android.R.layout.simple_spinner_dropdown_item, labels,
                     )
-                    // af_heart is Kokoro's flagship English voice.
-                    voice.setSelection(labels.indexOf("af_heart").coerceAtLeast(0))
+                    // Keep the chosen voice across a language change; otherwise start on
+                    // af_heart, Kokoro's flagship English voice.
+                    voice.setSelection(
+                        if (previous in labels.indices) previous
+                        else labels.indexOf("af_heart").coerceAtLeast(0),
+                    )
                     ready = true
                     busy = false
                     status.text = "Ready. Running fully offline."

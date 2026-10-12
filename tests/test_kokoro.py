@@ -30,3 +30,25 @@ def test_empty_text_skips_model():
 
 def test_voices_sorted():
     assert KokoroEngine(FakeKokoro()).voices() == ["af_heart", "bf_emma"]
+
+
+def test_hungarian_is_offered_and_forwarded():
+    from ttslts.tts.kokoro_engine import LANGUAGES
+
+    assert "hu" in LANGUAGES
+    k = FakeKokoro()
+    KokoroEngine(k).synthesize("Szia!", "af_heart", 1.0, "hu")
+    assert k.calls[0][3] == "hu"
+
+
+def test_hungarian_text_phonemizes_with_kokoro_vocabulary():
+    # Every phoneme espeak-ng produces for Hungarian must survive Kokoro's tokenizer,
+    # otherwise sounds are silently dropped.
+    from kokoro_onnx.tokenizer import Tokenizer
+
+    t = Tokenizer()
+    text = "Ez egy magyar nyelvű próbamondat: gyors beszéd, csütörtök, ősz, zöld, hűvös."
+    phonemes = t.phonemize(text, "hu")
+    assert phonemes
+    assert t.known(phonemes) == "".join(c for c in phonemes if c in t.vocab)
+    assert all(c == " " or c in t.vocab for c in phonemes)

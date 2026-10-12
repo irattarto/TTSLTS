@@ -1,10 +1,12 @@
 """RVC v2 inference with ONNX Runtime.
 
-Three models are involved, all supplied by the user:
+Three models are involved; the voice model is the user's own:
 
 * the RVC v2 voice model, exported to ONNX (RVC WebUI or w-okada export),
 * a ContentVec / HuBERT feature extractor in ONNX (768-dim, e.g. ``vec-768-layer-12.onnx``),
 * optionally an RMVPE pitch extractor in ONNX; without it a built-in YIN estimator is used.
+
+The two base models can be fetched and prepared by the app itself (``rvc_base``).
 """
 
 from __future__ import annotations
@@ -177,5 +179,11 @@ def load_rvc(
     if not contentvec_path:
         raise ValueError("No ContentVec model selected (Settings > Models)")
     contentvec = ContentVec(make_session(contentvec_path, use_gpu))
-    pitch_fn = RmvpePitch(make_session(rmvpe_path, use_gpu)) if rmvpe_path else None
+    pitch_fn = None
+    if rmvpe_path:
+        from ttslts.vc.rmvpe_mel import RmvpeMelPitch, is_mel_model
+
+        session = make_session(rmvpe_path, use_gpu)
+        # The original RVC export takes a mel spectrogram; w-okada's takes the waveform.
+        pitch_fn = RmvpeMelPitch(session) if is_mel_model(session) else RmvpePitch(session)
     return RvcModel(make_session(model_path, use_gpu), contentvec, pitch_fn, fallback_sr)

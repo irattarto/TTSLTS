@@ -1,0 +1,26 @@
+name: Verify RVC base models
+
+# Downloads the original RVC base models and checks the app's pipeline against PyTorch.
+on:
+  pull_request:
+    paths:
+      - "src/ttslts/vc/**"
+      - "tools/verify_rvc_base.py"
+      - ".github/workflows/rvc-base.yml"
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the app and the PyTorch reference
+        run: |
+          pip install -e .
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+          pip install transformers
+      - run: python tools/verify_rvc_base.py
