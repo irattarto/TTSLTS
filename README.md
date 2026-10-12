@@ -43,7 +43,7 @@ Settings are saved automatically to `%APPDATA%\TTSLTS\settings.json`.
 1. Settings > Models > **Download Kokoro** (about 340 MB, saved to `%APPDATA%\TTSLTS\models\kokoro`). You can also point the two fields at your own `kokoro-v1.0.onnx` and `voices-v1.0.bin`.
 2. On the **Text to Speech** tab, type text, pick a voice, language and speed, then **Speak** or **Save WAV…**.
 3. **Play on** picks the output device. Choose a virtual cable to send speech into Discord, games or OBS.
-   **Hungarian:** for real Hungarian voices pick the **Piper (Hungarian voices)** engine on the TTS tab after downloading them (Settings > Models > *Download Hungarian voices*, about 190 MB, from the original [Piper voice collection](https://huggingface.co/rhasspy/piper-voices); you are asked to accept the terms first). The voices Anna, Berta and Imre use CC0 training data but were fine-tuned from Piper's US English *lessac* voice, whose data is licensed for research use, so keep them to research and personal use.
+   **Hungarian:** choosing Hungarian as the language switches to the **Piper (Hungarian voices)** engine by default (you can set the engine back to Kokoro by hand). If the voices are not downloaded yet you are offered the download (Settings > Models > *Download Hungarian voices*) (Settings > Models > *Download Hungarian voices*, about 190 MB, from the original [Piper voice collection](https://huggingface.co/rhasspy/piper-voices); you are asked to accept the terms first). The voices Anna, Berta and Imre use CC0 training data but were fine-tuned from Piper's US English *lessac* voice, whose data is licensed for research use, so keep them to research and personal use. Voice variation and Rhythm variation sliders make Piper steadier or livelier, and common Hungarian abbreviations (kb., pl., dr., stb.) and units are read as words.
 
    Kokoro's own **Hungarian (experimental)** language option, by contrast, is not a Kokoro language, so no voice was trained on it. Choosing it makes espeak-ng pronounce the Hungarian text and one of the existing voices read it, so expect a foreign accent. The Android app has the same option.
 4. Tick **Speak with my voice model (RVC)** to run Kokoro's output through your RVC voice, giving TTS your custom voice.
@@ -91,9 +91,10 @@ Kokoro is Apache-2.0 and RVC is MIT, so both are usable commercially, but check 
 
 ## Android app (text to speech only)
 
-`android/` contains a native Android app that runs the same Kokoro voices offline through [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx). It does text to speech only; the RVC voice changer is desktop-only because real-time voice conversion is too heavy for phones.
+`android/` contains a native Android app that runs Kokoro and the Hungarian Piper voices offline through [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx). It does text to speech only; the RVC voice changer is desktop-only because real-time voice conversion is too heavy for phones.
 
 - On first launch the app downloads the Kokoro model once (several hundred MB), then works offline.
+- The **Engine** choice switches to **Piper (Hungarian voices)**; choosing Hungarian as the language does this by default. Anna, Berta and Imre download on demand (about 65 MB each) after you accept their terms (research and personal use).
 - Pick a voice and speed, then **Speak**, or **Save WAV**. Sharing text to TTSLTS from another app also fills the text box.
 - Download `TTSLTS-android.apk` from the latest [release](../../releases) and allow installing from unknown sources. Release APKs are debug-signed, so installing a newer build over an older one may require uninstalling first.
 
