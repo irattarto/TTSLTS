@@ -85,3 +85,22 @@ src/ttslts/
 ## Licenses and consent
 
 Kokoro is Apache-2.0 and RVC is MIT, so both are usable commercially, but check the license of each voice model you use. Only clone voices you have permission to use.
+
+## Android app (text to speech only)
+
+`android/` contains a native Android app that runs the same Kokoro voices offline through [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx). It does text to speech only; the RVC voice changer is desktop-only because real-time voice conversion is too heavy for phones.
+
+- On first launch the app downloads the Kokoro model once (several hundred MB), then works offline.
+- Pick a voice and speed, then **Speak**, or **Save WAV**. Sharing text to TTSLTS from another app also fills the text box.
+- Download `TTSLTS-android.apk` from the latest [release](../../releases) and allow installing from unknown sources. Release APKs are debug-signed, so installing a newer build over an older one may require uninstalling first.
+
+Build it yourself (JDK 17, Android SDK, Gradle 8.9+):
+
+```sh
+./android/fetch-native.sh          # sherpa-onnx native libraries
+cd android && gradle assembleDebug # APK in app/build/outputs/apk/debug/
+```
+
+## Releases
+
+Pushing a tag such as `v0.1.0` runs the Release workflow, which builds the Windows zip and the Android APK and attaches both to a GitHub pre-release.

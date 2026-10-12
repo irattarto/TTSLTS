@@ -1,0 +1,78 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e . pyinstaller
+      - name: Build
+        run: >
+          pyinstaller --noconfirm --clean --windowed --name TTSLTS --paths src
+          --collect-all kokoro_onnx --collect-all espeakng_loader --collect-all phonemizer
+          --collect-all language_tags --collect-all csvw --collect-binaries onnxruntime
+          --collect-data sounddevice --collect-all _sounddevice_data
+          packaging/launcher.py
+      - name: Smoke test
+        run: dist\TTSLTS\TTSLTS.exe --version
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - name: Zip
+        run: Compress-Archive -Path dist\TTSLTS -DestinationPath TTSLTS-windows.zip
+        shell: pwsh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TTSLTS-windows
+          path: TTSLTS-windows.zip
+
+  android:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: "8.9"
+      - name: Fetch sherpa-onnx native libraries
+        run: ./android/fetch-native.sh
+      - name: Build debug APK
+        working-directory: android
+        run: gradle --no-daemon assembleDebug
+      - name: Name the APK
+        run: cp android/app/build/outputs/apk/debug/app-debug.apk TTSLTS-android.apk
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TTSLTS-android
+          path: TTSLTS-android.apk
+
+  publish:
+    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [windows, android]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: assets
+          merge-multiple: true
+      - name: Publish pre-release
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          generate_release_notes: true
+          files: |
+            assets/TTSLTS-windows.zip
+            assets/TTSLTS-android.apk
