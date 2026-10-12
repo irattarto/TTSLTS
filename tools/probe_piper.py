@@ -18,6 +18,9 @@ def tree(path: str) -> list[dict]:
         return json.load(r)
 
 
+with urllib.request.urlopen(f"https://huggingface.co/api/models/{REPO}") as r:
+    print("REVISION", json.load(r)["sha"])
+
 entries = tree("hu")
 for e in entries:
     print(f"  {e['path']}  {e.get('size', '')}")
