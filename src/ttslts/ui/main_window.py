@@ -82,6 +82,7 @@ class MainWindow(QMainWindow):
         c.rvcBaseDownloaded.connect(self._on_rvc_base_downloaded)
         c.piperDownloaded.connect(self._on_piper_downloaded)
         c.pretrainedDownloaded.connect(self._on_pretrained_downloaded)
+        c.trainRuntimeInstalled.connect(self._on_train_runtime_installed)
         c.trainRunning.connect(self._on_train_running)
         c.trainStage.connect(self._on_train_stage)
         c.trainProgress.connect(self._on_train_progress)
@@ -221,11 +222,14 @@ class MainWindow(QMainWindow):
         )
         intro.setWordWrap(True)
         layout.addWidget(intro)
-        self.train_unavailable = QLabel(self.controller.training_unavailable_reason())
-        self.train_unavailable.setWordWrap(True)
-        self.train_unavailable.setStyleSheet("color: #c0392b;")
-        self.train_unavailable.setVisible(bool(self.train_unavailable.text()))
-        layout.addWidget(self.train_unavailable)
+        self.train_setup_hint = QLabel(
+            "The first time, TTSLTS sets up PyTorch for training (a one-time download, "
+            "you are asked first)."
+        )
+        self.train_setup_hint.setWordWrap(True)
+        self.train_setup_hint.setStyleSheet("color: gray;")
+        self.train_setup_hint.setVisible(not self.controller.training_runtime_ready())
+        layout.addWidget(self.train_setup_hint)
 
         self.train_files = QListWidget()
         self.train_files.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
@@ -445,6 +449,9 @@ class MainWindow(QMainWindow):
             self.controller.save_wav(self.text_edit.toPlainText(), path)
 
     def _show_error(self, message: str) -> None:
+        self._pending_train = None  # a failed setup step cancels the queued training
+        self.train_bar.setRange(0, 1000)
+        self._apply_train_availability()
         self.statusBar().showMessage(message)
         if self.isVisible():
             QMessageBox.warning(self, APP_NAME, message)
@@ -574,8 +581,7 @@ class MainWindow(QMainWindow):
         return name or "my-voice"
 
     def _apply_train_availability(self) -> None:
-        ready = not self.train_unavailable.text()
-        self.train_start_btn.setEnabled(ready and not self._train_busy)
+        self.train_start_btn.setEnabled(not self._train_busy)
 
     def _train_add_files(self) -> None:
         files, _ = QFileDialog.getOpenFileNames(
@@ -592,10 +598,8 @@ class MainWindow(QMainWindow):
 
     def _train_start(self) -> None:
         from ttslts import paths
-        from ttslts.train import pretrained
-        from ttslts.train.trainer import CHECKPOINT
+        from ttslts.train.hparams import CHECKPOINT
 
-        s = self.settings
         files = [self.train_files.item(i).text() for i in range(self.train_files.count())]
         name = self._train_name()
         self.train_name_edit.setText(name)
@@ -624,13 +628,46 @@ class MainWindow(QMainWindow):
 
                 shutil.rmtree(paths.train_dir() / name, ignore_errors=True)
 
-        if not pretrained.is_installed(s.train_sample_rate):
-            self._download_pretrained(then_train=(files, name, resume))
-            return
-        self.train_log.clear()
-        self._train_result = ""
-        self.train_use_btn.setEnabled(False)
-        self.controller.start_training(files, name, resume)
+        self._train_continue((files, name, resume))
+
+    def _train_continue(self, job: tuple) -> None:
+        """Set up what training still needs (environment, pretrained models), then start it."""
+        from ttslts.train import pretrained
+
+        if not self.controller.training_runtime_ready():
+            self._install_train_runtime(job)
+        elif not pretrained.is_installed(self.settings.train_sample_rate):
+            self._download_pretrained(job)
+        else:
+            self.train_log.clear()
+            self._train_result = ""
+            self.train_use_btn.setEnabled(False)
+            self.controller.start_training(*job)
+
+    def _install_train_runtime(self, job: tuple) -> None:
+        from ttslts.train import runtime
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(runtime.CONSENT_TITLE)
+        box.setText("Set up the training environment?")
+        box.setInformativeText(runtime.consent_text())
+        accept = box.addButton("Download and set up", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        if box.clickedButton() is accept:
+            self._pending_train = job
+            self.train_start_btn.setEnabled(False)
+            self.train_bar.setRange(0, 0)  # busy indicator while pip works
+            self.controller.install_training_runtime()
+
+    def _on_train_runtime_installed(self) -> None:
+        self.train_bar.setRange(0, 1000)
+        self.train_setup_hint.setVisible(False)
+        self._apply_train_availability()
+        pending, self._pending_train = self._pending_train, None
+        if pending is not None:
+            self._train_continue(pending)
 
     def _download_pretrained(self, then_train: tuple | None = None) -> None:
         from ttslts.train import pretrained
@@ -652,10 +689,7 @@ class MainWindow(QMainWindow):
         self._apply_train_availability()
         pending, self._pending_train = self._pending_train, None
         if pending is not None:
-            self.train_log.clear()
-            self._train_result = ""
-            self.train_use_btn.setEnabled(False)
-            self.controller.start_training(*pending)
+            self._train_continue(pending)
 
     def _on_train_running(self, running: bool) -> None:
         self._train_busy = running

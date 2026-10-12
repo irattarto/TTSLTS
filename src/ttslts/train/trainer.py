@@ -23,7 +23,7 @@ from ttslts.train.rvc_model.models import MultiPeriodDiscriminatorV2, Synthesize
 
 log = logging.getLogger(__name__)
 
-CHECKPOINT = "checkpoint.pt"
+CHECKPOINT = hp.CHECKPOINT
 
 
 class Cancelled(Exception):

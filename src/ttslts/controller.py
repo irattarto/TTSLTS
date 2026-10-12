@@ -36,6 +36,7 @@ class Controller(QObject):
     rvcBaseDownloaded = Signal(str, str)
     piperDownloaded = Signal(list)
     pretrainedDownloaded = Signal(int)
+    trainRuntimeInstalled = Signal()
     trainRunning = Signal(bool)
     trainStage = Signal(str)
     trainProgress = Signal(dict)
@@ -186,29 +187,26 @@ class Controller(QObject):
 
     # -- training --------------------------------------------------------
     @staticmethod
-    def training_unavailable_reason() -> str:
-        """Why training cannot run in this install, or "" if it can."""
-        import importlib.util
+    def training_runtime_ready() -> bool:
+        """Whether PyTorch is set up for training (see ``train.runtime``)."""
+        from ttslts.train import runtime
 
-        if getattr(sys, "frozen", False):
-            return (
-                "Training is not part of the packaged app. Run TTSLTS from source with "
-                "pip install -e .[train] to train voices."
-            )
-        if importlib.util.find_spec("torch") is None:
-            return "Training needs PyTorch. Install it with: pip install -e .[train]"
-        if importlib.util.find_spec("soundfile") is None:
-            return "Reading mp3 files needs the soundfile package: pip install -e .[train]"
-        return ""
+        return runtime.is_installed()
 
-    @staticmethod
-    def _train_python() -> str:
-        exe = Path(sys.executable)
-        if exe.name.lower() == "pythonw.exe":  # the child needs a stdout to report on
-            console = exe.with_name("python.exe")
-            if console.exists():
-                return str(console)
-        return str(exe)
+    def install_training_runtime(self) -> None:
+        """Set up the private PyTorch environment. Call only after consent."""
+        from ttslts.train import runtime
+
+        def progress(name, done, total):
+            pct = f" {done * 100 // total}%" if total else ""
+            self.status.emit(f"Downloading {name}{pct}")
+
+        def work():
+            runtime.install(progress, self.status.emit)
+            self.trainRuntimeInstalled.emit()
+            self.status.emit("Training environment ready")
+
+        self._background(work, "install-train-runtime")
 
     @property
     def training(self) -> bool:
@@ -216,14 +214,13 @@ class Controller(QObject):
 
     def start_training(self, files: list[str], name: str, resume: bool) -> None:
         """Train a voice from the recordings in ``files`` (see ``Settings.train_*``)."""
-        from ttslts.train import hparams, pretrained
+        from ttslts.train import hparams, pretrained, runtime
 
         s = self.settings
         if self.training:
             return
-        reason = self.training_unavailable_reason()
-        if reason:
-            self.error.emit(reason)
+        if not self.training_runtime_ready():
+            self.error.emit("The training environment is not set up yet.")
             return
         if not files and not resume:
             self.error.emit("Add at least one recording (mp3 or wav) to train on.")
@@ -266,13 +263,13 @@ class Controller(QObject):
         flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
         try:
             proc = subprocess.Popen(
-                [self._train_python(), "-u", "-m", "ttslts.train.run", str(job_file)],
+                [*runtime.python_command(), "-u", "-m", "ttslts.train.run", str(job_file)],
                 stdout=subprocess.PIPE,
                 stderr=log_file,
                 text=True,
                 encoding="utf-8",
                 creationflags=flags,
-                env={**os.environ, "PYTHONIOENCODING": "utf-8"},
+                env={**os.environ, "PYTHONIOENCODING": "utf-8", **runtime.prepare_for_run()},
             )
         except OSError as exc:
             log_file.close()
