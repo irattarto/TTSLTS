@@ -31,6 +31,14 @@ from ttslts import APP_NAME
 from ttslts.audio import devices
 from ttslts.controller import Controller
 from ttslts.tts.kokoro_engine import LANGUAGES
+from ttslts.tts.piper_download import (
+    HELP_ENGINE,
+    HELP_RHYTHM,
+    HELP_SPEED,
+    HELP_VARIATION,
+    HELP_VOICE,
+    HINT,
+)
 
 DEFAULT_DEVICE = "System default"
 
@@ -85,14 +93,19 @@ class MainWindow(QMainWindow):
         self.engine_combo.addItem("Piper (Hungarian voices)", "piper")
         self.engine_combo.setCurrentIndex(max(0, self.engine_combo.findData(s.tts_engine)))
         self.engine_combo.currentIndexChanged.connect(self._on_engine_changed)
+        self.engine_combo.setToolTip(HELP_ENGINE)
         form.addRow("Engine", self.engine_combo)
 
         self.piper_combo = QComboBox()
         self.piper_combo.currentIndexChanged.connect(
             lambda i: self._set("piper_voice", self.piper_combo.itemData(i) or "")
         )
+        self.piper_combo.setToolTip(HELP_VOICE)
         form.addRow("Hungarian voice", self.piper_combo)
-        self.piper_row = self.piper_combo
+        self.piper_hint = QLabel(HINT)
+        self.piper_hint.setWordWrap(True)
+        self.piper_hint.setStyleSheet("color: gray;")
+        form.addRow(self.piper_hint)
 
         self.voice_combo = QComboBox()
         self.voice_combo.setEditable(True)
@@ -104,26 +117,25 @@ class MainWindow(QMainWindow):
         for code, label in LANGUAGES.items():
             self.lang_combo.addItem(label, code)
         self.lang_combo.setCurrentIndex(max(0, self.lang_combo.findData(s.tts_lang)))
-        self.lang_combo.currentIndexChanged.connect(
-            lambda i: self._set("tts_lang", self.lang_combo.itemData(i))
-        )
+        self.lang_combo.currentIndexChanged.connect(self._on_language_changed)
         form.addRow("Language", self.lang_combo)
         self._tts_form = form
 
         self.variation_spin = QDoubleSpinBox(minimum=0.1, maximum=1.5, singleStep=0.05)
         self.variation_spin.setValue(s.piper_variation)
-        self.variation_spin.setToolTip("Lower is steadier, higher is more varied and expressive")
+        self.variation_spin.setToolTip(HELP_VARIATION)
         self.variation_spin.valueChanged.connect(lambda v: self._set("piper_variation", float(v)))
         form.addRow("Voice variation", self.variation_spin)
         self.rhythm_spin = QDoubleSpinBox(minimum=0.1, maximum=1.5, singleStep=0.05)
         self.rhythm_spin.setValue(s.piper_rhythm)
-        self.rhythm_spin.setToolTip("Lower gives an even rhythm, higher a livelier one")
+        self.rhythm_spin.setToolTip(HELP_RHYTHM)
         self.rhythm_spin.valueChanged.connect(lambda v: self._set("piper_rhythm", float(v)))
         form.addRow("Rhythm variation", self.rhythm_spin)
 
         self.speed_spin = QDoubleSpinBox(minimum=0.5, maximum=2.0, singleStep=0.05)
         self.speed_spin.setValue(s.tts_speed)
         self.speed_spin.valueChanged.connect(lambda v: self._set("tts_speed", float(v)))
+        self.speed_spin.setToolTip(HELP_SPEED)
         form.addRow("Speed", self.speed_spin)
 
         self.tts_rvc_check = QCheckBox("Speak with my voice model (RVC)")
@@ -335,10 +347,23 @@ class MainWindow(QMainWindow):
         self._set("tts_engine", self.engine_combo.currentData())
         self._apply_engine()
 
+    def _on_language_changed(self, index: int) -> None:
+        code = self.lang_combo.itemData(index)
+        self._set("tts_lang", code)
+        # Piper has real Hungarian voices, so it is the default for Hungarian. Only a language
+        # change switches; the engine can still be set back to Kokoro by hand afterwards.
+        if code == "hu" and self.settings.tts_engine == "kokoro":
+            self.engine_combo.setCurrentIndex(self.engine_combo.findData("piper"))
+            from ttslts.tts import piper_download
+
+            if not piper_download.installed_voices():
+                QTimer.singleShot(0, self._download_piper)
+
     def _apply_engine(self) -> None:
         piper = self.settings.tts_engine == "piper"
         form = self._tts_form
         form.setRowVisible(self.piper_combo, piper)
+        form.setRowVisible(self.piper_hint, piper)
         form.setRowVisible(self.variation_spin, piper)
         form.setRowVisible(self.rhythm_spin, piper)
         form.setRowVisible(self.voice_combo, not piper)
@@ -352,6 +377,12 @@ class MainWindow(QMainWindow):
         self.piper_combo.clear()
         for voice_id in installed:
             self.piper_combo.addItem(piper_download.display_name(voice_id), voice_id)
+            self.piper_combo.setItemData(
+                self.piper_combo.count() - 1,
+                f"{piper_download.display_name(voice_id)}: "
+                f"{piper_download.VOICE_NOTES.get(voice_id, '')}",
+                Qt.ItemDataRole.ToolTipRole,
+            )
         if not installed:
             self.piper_combo.addItem("None installed (Settings > Models > Download)", "")
         self.piper_combo.blockSignals(False)

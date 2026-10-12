@@ -36,6 +36,48 @@ VOICES: dict[str, tuple[str, str, dict[str, int]]] = {
     ),
 }
 
+# What to expect from each voice, shown as hover help. All three are single-speaker, 22.05 kHz,
+# medium-quality voices; the pitch figures are the median speaking pitch measured in CI on a test
+# sentence at normal speed.
+VOICE_NOTES: dict[str, str] = {
+    "hu_HU-anna-medium": (
+        "higher-pitched voice (about 175 Hz when speaking), very close to Berta. "
+        "Hungarian, medium quality."
+    ),
+    "hu_HU-berta-medium": (
+        "higher-pitched voice (about 170 Hz when speaking), very close to Anna. "
+        "Hungarian, medium quality."
+    ),
+    "hu_HU-imre-medium": (
+        "lower-pitched voice (about 115 Hz when speaking), the deepest of the three. "
+        "Hungarian, medium quality."
+    ),
+}
+
+HELP_ENGINE = (
+    "Kokoro: 53 voices in nine languages. Hungarian there is experimental and clearly "
+    "accented.\nPiper: real Hungarian voices (Anna, Berta, Imre), downloaded separately "
+    "(Settings > Models)."
+)
+HELP_VOICE = (
+    "Three different Hungarian speakers. They sound different (pitch and character), so "
+    "listen to each one with your own text and keep the one you like. Hover a name for "
+    "details."
+)
+HELP_VARIATION = (
+    "How much the voice changes from word to word.\nLower: steadier, more monotone.\n"
+    "Higher: more expressive, but can get unstable.\nDefault 0.67."
+)
+HELP_RHYTHM = (
+    "How much the timing of syllables varies.\nLower: even, metronome-like.\n"
+    "Higher: livelier, but can sound uneven.\nDefault 0.80."
+)
+HELP_SPEED = "Speaking speed. 1.0 is normal. Slightly slower (0.9) can help with clarity."
+HINT = (
+    "Tip: try all three voices first. If it sounds flat, raise Voice variation a little; if it "
+    "sounds shaky, lower it. Hover any setting for details."
+)
+
 CONSENT_TITLE = "Hungarian voices (Piper): terms of use"
 CONSENT_TEXT = f"""\
 The Hungarian voices Anna, Berta and Imre are downloaded from the original Piper voice

@@ -8,16 +8,18 @@ import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsKokoroModelConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
+import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig
 import java.io.File
 import java.io.OutputStream
 import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.max
 
-/** Wraps the sherpa-onnx Kokoro engine: streaming playback and WAV export. */
+/** Wraps the sherpa-onnx engines (Kokoro, Piper): streaming playback and WAV export. */
 class Speaker(private val context: Context) {
     private var tts: OfflineTts? = null
-    private var loadedLanguage: String? = null
+    /** Which model is loaded ("kokoro:<language>" or "piper:<voice id>"); a change reloads. */
+    private var loadedKey: String? = null
 
     @Volatile
     private var stopRequested = false
@@ -32,7 +34,8 @@ class Speaker(private val context: Context) {
      */
     @Synchronized
     fun load(language: String = "") {
-        if (tts != null && loadedLanguage == language) return
+        val key = "kokoro:$language"
+        if (tts != null && loadedKey == key) return
         tts?.release()
         tts = null
         val dir = ModelStore.modelDir(context)
@@ -58,7 +61,32 @@ class Speaker(private val context: Context) {
             ruleFsts = existing("phone-zh.fst", "date-zh.fst", "number-zh.fst"),
         )
         tts = OfflineTts(config = config)
-        loadedLanguage = language
+        loadedKey = key
+    }
+
+    /** Loads a Piper voice (a few seconds). Blocking; call from a background thread. */
+    @Synchronized
+    fun loadPiper(voice: PiperVoiceInfo) {
+        val key = "piper:${voice.id}"
+        if (tts != null && loadedKey == key) return
+        tts?.release()
+        tts = null
+        val dir = ModelStore.modelDir(context, voice.dirName)
+        val vits = OfflineTtsVitsModelConfig(
+            model = File(dir, voice.modelFile).absolutePath,
+            tokens = File(dir, "tokens.txt").absolutePath,
+            dataDir = File(dir, "espeak-ng-data").absolutePath,
+        )
+        val config = OfflineTtsConfig(
+            model = OfflineTtsModelConfig(
+                vits = vits,
+                numThreads = max(2, Runtime.getRuntime().availableProcessors().coerceAtMost(4)),
+                debug = false,
+                provider = "cpu",
+            ),
+        )
+        tts = OfflineTts(config = config)
+        loadedKey = key
     }
 
     fun stop() {
@@ -148,6 +176,6 @@ class Speaker(private val context: Context) {
     fun release() {
         tts?.release()
         tts = null
-        loadedLanguage = null
+        loadedKey = null
     }
 }
