@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 CHECKPOINT = "checkpoint.pt"  # resumable training state in a work folder
-SEGMENT_SAMPLES = 12800  # audio samples the generator is trained on per example
 INTER_CHANNELS = 192
 HIDDEN_CHANNELS = 192
 FILTER_CHANNELS = 768
@@ -32,6 +31,7 @@ C_KL = 1.0
 class SampleRateConfig:
     sample_rate: int
     hop: int
+    segment_samples: int  # audio the generator is trained on per example (a whole number of hops)
     n_fft: int  # also the window length
     n_mels: int
     upsample_rates: tuple[int, ...]
@@ -49,7 +49,7 @@ class SampleRateConfig:
         """Keyword arguments of ``SynthesizerTrnMs768NSFsid``."""
         return {
             "spec_channels": self.spec_channels,
-            "segment_size": SEGMENT_SAMPLES // self.hop,
+            "segment_size": self.segment_samples // self.hop,
             "inter_channels": INTER_CHANNELS,
             "hidden_channels": HIDDEN_CHANNELS,
             "filter_channels": FILTER_CHANNELS,
@@ -95,7 +95,7 @@ class SampleRateConfig:
 
 
 SAMPLE_RATES: dict[int, SampleRateConfig] = {
-    32000: SampleRateConfig(32000, 320, 1024, 80, (10, 8, 2, 2), (20, 16, 4, 4)),
-    40000: SampleRateConfig(40000, 400, 2048, 125, (10, 10, 2, 2), (16, 16, 4, 4)),
-    48000: SampleRateConfig(48000, 480, 2048, 128, (12, 10, 2, 2), (24, 20, 4, 4)),
+    32000: SampleRateConfig(32000, 320, 12800, 1024, 80, (10, 8, 2, 2), (20, 16, 4, 4)),
+    40000: SampleRateConfig(40000, 400, 12800, 2048, 125, (10, 10, 2, 2), (16, 16, 4, 4)),
+    48000: SampleRateConfig(48000, 480, 11520, 2048, 128, (12, 10, 2, 2), (24, 20, 4, 4)),
 }

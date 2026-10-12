@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import os
 import re
 from pathlib import Path
 
@@ -32,7 +33,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from ttslts import APP_NAME
+from ttslts import APP_NAME, paths
 from ttslts.audio import devices
 from ttslts.controller import Controller
 from ttslts.train import prepare
@@ -59,6 +60,7 @@ class MainWindow(QMainWindow):
         self._quitting = False
         self._tray_hint_shown = False
 
+        self._voice_combos: list[QComboBox] = []
         self.setWindowTitle(APP_NAME)
         self.resize(560, 460)
 
@@ -152,6 +154,7 @@ class MainWindow(QMainWindow):
         self.speed_spin.setToolTip(HELP_SPEED)
         form.addRow("Speed", self.speed_spin)
 
+        form.addRow("Voice model", self._voice_combo())
         self.tts_rvc_check = QCheckBox("Speak with my voice model (RVC)")
         self.tts_rvc_check.setChecked(s.tts_through_rvc)
         self.tts_rvc_check.toggled.connect(lambda v: self._set("tts_through_rvc", v))
@@ -184,6 +187,7 @@ class MainWindow(QMainWindow):
         form.addRow("Microphone", self.input_combo)
         self.output_combo = self._device_combo("output", "output_device")
         form.addRow("Output", self.output_combo)
+        form.addRow("Voice model", self._voice_combo())
         self.pitch_spin = QSpinBox(minimum=-24, maximum=24, suffix=" semitones")
         self.pitch_spin.setValue(s.pitch_shift)
         self.pitch_spin.valueChanged.connect(lambda v: self._set("pitch_shift", v))
@@ -191,6 +195,10 @@ class MainWindow(QMainWindow):
         self.speaker_spin = QSpinBox(minimum=0, maximum=255)
         self.speaker_spin.setValue(s.speaker_id)
         self.speaker_spin.valueChanged.connect(lambda v: self._set("speaker_id", v))
+        self.speaker_spin.setToolTip(
+            "Only for voices that contain several speakers. Voices trained in TTSLTS have one "
+            "speaker, number 0, so leave this at 0."
+        )
         form.addRow("Speaker ID", self.speaker_spin)
         layout.addLayout(form)
 
@@ -412,6 +420,60 @@ class MainWindow(QMainWindow):
     def _set(self, key: str, value) -> None:
         setattr(self.settings, key, value)
         self.controller.save_settings()
+        if key == "rvc_model_path":
+            self._refresh_voice_combos()
+
+    @staticmethod
+    def _same_path(a: str, b: str) -> bool:
+        return (
+            bool(a)
+            and bool(b)
+            and os.path.normcase(os.path.abspath(a)) == os.path.normcase(os.path.abspath(b))
+        )
+
+    def _voice_combo(self) -> QComboBox:
+        """A picker for the voice model, by name: voices trained here plus the chosen file."""
+        combo = QComboBox()
+        combo.setToolTip(
+            "The voice used by the voice changer and by Speak with my voice model. Voices you "
+            "train are listed by name; pick a file of your own in Settings > Models."
+        )
+        combo.activated.connect(lambda i, c=combo: self._on_voice_picked(c.itemData(i) or ""))
+        self._voice_combos.append(combo)
+        self._refresh_voice_combos()
+        return combo
+
+    def _trained_voices(self) -> list[tuple[str, str]]:
+        root = paths.voices_dir()
+        found = []
+        for folder in sorted(root.iterdir()) if root.exists() else []:
+            onnx = folder / f"{folder.name}.onnx"
+            if onnx.exists():
+                found.append((folder.name, str(onnx)))
+        return found
+
+    def _refresh_voice_combos(self) -> None:
+        voices = self._trained_voices()
+        current = self.settings.rvc_model_path
+        for combo in self._voice_combos:
+            combo.blockSignals(True)
+            combo.clear()
+            combo.addItem("(none selected)", "")
+            for name, path in voices:
+                combo.addItem(name, path)
+            if current and not any(self._same_path(current, p) for _n, p in voices):
+                combo.addItem(f"{Path(current).stem} (file from Settings)", current)
+            index = next(
+                (i for i in range(combo.count()) if self._same_path(current, combo.itemData(i))),
+                0,
+            )
+            combo.setCurrentIndex(index)
+            combo.blockSignals(False)
+
+    def _on_voice_picked(self, path: str) -> None:
+        if hasattr(self, "rvc_model_edit"):
+            self.rvc_model_edit.setText(path)
+        self._set("rvc_model_path", path)
 
     def _device_combo(self, kind: str, key: str) -> QComboBox:
         combo = QComboBox()
@@ -597,7 +659,6 @@ class MainWindow(QMainWindow):
             self.train_files.takeItem(self.train_files.row(item))
 
     def _train_start(self) -> None:
-        from ttslts import paths
         from ttslts.train.hparams import CHECKPOINT
 
         files = [self.train_files.item(i).text() for i in range(self.train_files.count())]
@@ -739,6 +800,7 @@ class MainWindow(QMainWindow):
             self.train_status.setText("Stopped before anything was saved.")
             return
         self._train_result = onnx
+        self._refresh_voice_combos()
         self.train_use_btn.setEnabled(bool(onnx))
         if finished:
             self.train_bar.setValue(1000)
@@ -759,7 +821,6 @@ class MainWindow(QMainWindow):
         )
 
     def _train_open_folder(self) -> None:
-        from ttslts import paths
 
         folder = paths.voices_dir() / self._train_name()
         folder.mkdir(parents=True, exist_ok=True)
