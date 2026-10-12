@@ -1,0 +1,31 @@
+name: Cleanup
+
+# Temporary: deletes Actions caches and build artifacts (the release holds the final files).
+# Workflow runs and their logs are left alone. Remove this file once it has run.
+on: workflow_dispatch
+
+permissions:
+  actions: write
+  contents: read
+
+jobs:
+  cleanup:
+    runs-on: ubuntu-24.04
+    env:
+      GH_TOKEN: ${{ github.token }}
+      REPO: ${{ github.repository }}
+    steps:
+      - name: Delete caches
+        run: |
+          gh cache list --repo "$REPO" --limit 100 || true
+          gh cache delete --all --repo "$REPO" || true
+          echo "Caches left:"
+          gh cache list --repo "$REPO" --limit 100 || true
+      - name: Delete build artifacts
+        run: |
+          gh api --paginate "repos/$REPO/actions/artifacts" --jq '.artifacts[].id' |
+            while read -r id; do
+              gh api -X DELETE "repos/$REPO/actions/artifacts/$id" >/dev/null && echo "deleted artifact $id"
+            done
+          echo "Artifacts left:"
+          gh api "repos/$REPO/actions/artifacts" --jq '.total_count'
