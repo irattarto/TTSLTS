@@ -1,0 +1,44 @@
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e . pyinstaller
+      - name: Build
+        run: >
+          pyinstaller --noconfirm --clean --windowed --name TTSLTS --paths src
+          --collect-all kokoro_onnx --collect-all espeakng_loader --collect-all phonemizer
+          --collect-all language_tags --collect-all csvw --collect-binaries onnxruntime
+          --collect-data sounddevice --collect-all _sounddevice_data
+          packaging/launcher.py
+      - name: Smoke test
+        run: dist\TTSLTS\TTSLTS.exe --version
+        env:
+          QT_QPA_PLATFORM: offscreen
+      - name: Zip
+        run: Compress-Archive -Path dist\TTSLTS -DestinationPath TTSLTS-windows.zip
+        shell: pwsh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: TTSLTS-windows
+          path: TTSLTS-windows.zip
+      - name: Publish pre-release
+        if: startsWith(github.ref, 'refs/tags/v')
+        uses: softprops/action-gh-release@v2
+        with:
+          prerelease: true
+          generate_release_notes: true
+          files: TTSLTS-windows.zip
