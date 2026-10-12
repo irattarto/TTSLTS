@@ -1,0 +1,19 @@
+name: Probe RVC base models
+
+on:
+  pull_request:
+    paths:
+      - "tools/probe_rvc.py"
+      - ".github/workflows/probe-rvc.yml"
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install onnxruntime numpy huggingface_hub torch --index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple
+      - run: python tools/probe_rvc.py
