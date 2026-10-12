@@ -103,7 +103,7 @@ cd android && gradle assembleDebug # APK in app/build/outputs/apk/debug/
 
 ## Releases
 
-Pushing a tag such as `v0.1.0` runs the Release workflow, which builds these downloads and attaches them to a GitHub pre-release:
+Pushing a tag such as `v0.1.0` (or running the Release workflow by hand from the Actions tab with a tag name, which creates the tag) builds these downloads and attaches them to a GitHub pre-release:
 
 | File | For |
 |---|---|
