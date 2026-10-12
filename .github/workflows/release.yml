@@ -101,7 +101,8 @@ jobs:
           set -x
           sudo -E timeout 300 apt-get install -y --no-install-recommends ./ttslts_*_amd64.deb
           test -f /usr/share/applications/ttslts.desktop
-          timeout 60 ttslts --version
+          # Full path: the pip-installed console script of the same name is earlier on PATH.
+          timeout 60 /usr/bin/ttslts --version
         env:
           DEBIAN_FRONTEND: noninteractive
           NEEDRESTART_MODE: a
