@@ -44,7 +44,9 @@ jobs:
           --collect-data sounddevice --collect-all _sounddevice_data
           packaging/launcher.py
       - name: Smoke test
-        run: dist\TTSLTS\TTSLTS.exe --version
+        run: |
+          dist\TTSLTS\TTSLTS.exe --version
+          dist\TTSLTS\TTSLTS.exe --selftest
         env:
           QT_QPA_PLATFORM: offscreen
       - name: Portable zip
@@ -91,7 +93,9 @@ jobs:
           --collect-data sounddevice --collect-all _sounddevice_data
           packaging/launcher.py
       - name: Smoke test the bundle
-        run: ./dist/TTSLTS/TTSLTS --version
+        run: |
+          ./dist/TTSLTS/TTSLTS --version
+          ./dist/TTSLTS/TTSLTS --selftest
         env:
           QT_QPA_PLATFORM: offscreen
       - name: Tarball
@@ -108,6 +112,7 @@ jobs:
           test -f /usr/share/applications/ttslts.desktop
           # Full path: the pip-installed console script of the same name is earlier on PATH.
           timeout 60 /usr/bin/ttslts --version
+          timeout 120 /usr/bin/ttslts --selftest
         env:
           DEBIAN_FRONTEND: noninteractive
           NEEDRESTART_MODE: a
