@@ -77,15 +77,20 @@ class _Unpickler(pickle.Unpickler):
         return _Storage(storage_type.dtype, data)
 
 
-def load_state_dict(path: str) -> dict[str, np.ndarray]:
-    """Return ``{name: ndarray}`` for a PyTorch zip checkpoint (state dict layout)."""
+def load_object(path: str):
+    """Return the unpickled top-level object of a PyTorch zip checkpoint (tensors as arrays)."""
     with zipfile.ZipFile(path) as archive:
         pkl = next((n for n in archive.namelist() if n.endswith("data.pkl")), None)
         if pkl is None:
             raise ValueError("Not a PyTorch zip checkpoint (no data.pkl)")
         prefix = pkl[: -len("data.pkl")]
         with archive.open(pkl) as f:
-            obj = _Unpickler(f, archive, prefix).load()
+            return _Unpickler(f, archive, prefix).load()
+
+
+def load_state_dict(path: str) -> dict[str, np.ndarray]:
+    """Return ``{name: ndarray}`` for a PyTorch zip checkpoint (state dict layout)."""
+    obj = load_object(path)
     if isinstance(obj, dict) and "model" in obj and isinstance(obj["model"], dict):
         obj = obj["model"]
     if not isinstance(obj, dict):

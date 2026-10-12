@@ -1,0 +1,35 @@
+name: Verify RVC .pth import
+
+# Checks the .pth -> ONNX importer against the original RVC PyTorch model code.
+on:
+  pull_request:
+    paths:
+      - "src/ttslts/vc/**"
+      - "tools/verify_rvc_pth.py"
+      - ".github/workflows/rvc-pth.yml"
+  workflow_dispatch:
+
+jobs:
+  verify:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the app and the PyTorch reference
+        run: |
+          pip install -e .
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Fetch the original RVC model code (pinned commit, MIT)
+        run: |
+          base=https://raw.githubusercontent.com/RVC-Project/Retrieval-based-Voice-Conversion/7b284a634667c34103eaaeed972b48ccdb4b893e/rvc/lib/infer_pack
+          mkdir -p refsrc/rvc/lib/infer_pack
+          touch refsrc/rvc/__init__.py refsrc/rvc/lib/__init__.py refsrc/rvc/lib/infer_pack/__init__.py
+          for f in models modules attentions commons transforms; do
+            curl -fsSL "$base/$f.py" -o "refsrc/rvc/lib/infer_pack/$f.py"
+          done
+      - run: python tools/verify_rvc_pth.py
+        env:
+          REF_SRC: ${{ github.workspace }}/refsrc
