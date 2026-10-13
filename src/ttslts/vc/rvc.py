@@ -112,6 +112,9 @@ class RvcModel:
         self.session = session
         self.contentvec = contentvec
         self.pitch_fn = pitch_fn or estimate_f0
+        self.index = None  # a RetrievalIndex of the voice's real features, if it has one
+        self.index_rate = 0.0  # 0..1: how much of each frame comes from the index
+        self.protect = 0.33  # 0..0.5: keeps unvoiced consonants clear when the index is used
         self.info = read_info(session, fallback_sr)
         self._inputs = {i.name: i for i in session.get_inputs()}
         known = set(_FEATS + _LENGTHS + _PITCH + _PITCHF + _SID + _NOISE)
@@ -129,7 +132,13 @@ class RvcModel:
         self, audio16k: np.ndarray, pitch_shift: float = 0.0, speaker_id: int = 0
     ) -> dict:
         feats = self.contentvec(audio16k)
+        original = feats
+        use_index = self.index is not None and self.index_rate > 0
+        if use_index:
+            retrieved = self.index.search(feats[0])[None]
+            feats = self.index_rate * retrieved + (1.0 - self.index_rate) * feats
         feats = np.repeat(feats, 2, axis=1)  # 20 ms -> 10 ms frames
+        original = np.repeat(original, 2, axis=1)
         n = feats.shape[1]
         f0 = None
         if self.info.uses_f0:
@@ -138,6 +147,11 @@ class RvcModel:
             n = min(n, len(f0))
             f0 = f0[:n]
         feats = feats[:, :n]
+        if use_index and f0 is not None and self.protect < 0.5:
+            # Unvoiced frames (consonants, breath) keep the speech's own features, so the
+            # index does not smear them into voiced sounds.
+            keep = np.where(f0 > 0, 1.0, self.protect).astype(np.float32)[None, :, None]
+            feats = feats * keep + original[:, :n] * (1.0 - keep)
 
         feed = {}
         for name, inp in self._inputs.items():

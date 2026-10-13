@@ -43,6 +43,8 @@ class Settings:
     rmvpe_path: str = ""
     rvc_sample_rate: int = 40000
     pitch_shift: int = 0
+    rvc_index_rate: float = 0.5  # how much the voice's real features are mixed in
+    rvc_protect: float = 0.33  # keeps consonants and breath clear when the index is used
     speaker_id: int = 0
     chunk_ms: int = 200
     context_ms: int = 600
