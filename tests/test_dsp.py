@@ -50,3 +50,25 @@ def test_crossfade_endpoints():
 def test_rms_db():
     assert rms_db(np.zeros(10)) <= -100
     assert rms_db(np.ones(10)) == pytest.approx(0)
+
+
+def test_split_at_quiet_cuts_in_a_pause_and_keeps_every_sample():
+    from ttslts.audio.dsp import split_at_quiet
+
+    sr = 16000
+    rng = np.random.default_rng(0)
+    speech = lambda s: (0.3 * rng.standard_normal(int(s * sr))).astype(np.float32)  # noqa: E731
+    pause = np.zeros(int(0.3 * sr), dtype=np.float32)
+    x = np.concatenate([speech(5.5), pause, speech(5.2), pause, speech(5.2), pause, speech(3)])
+    pieces = split_at_quiet(x, sr, target_s=6.0, search_s=1.5)
+    assert sum(len(p) for p in pieces) == len(x) and np.array_equal(np.concatenate(pieces), x)
+    assert all(len(p) <= 8 * sr for p in pieces[:-1]) and len(pieces) >= 3
+    for p in pieces[:-1]:  # every cut lands inside a pause, so no word is split
+        assert abs(p[-int(0.05 * sr) :]).max() == 0 or abs(p[-int(0.05 * sr) :]).mean() < 0.05
+
+
+def test_split_at_quiet_leaves_short_audio_alone():
+    from ttslts.audio.dsp import split_at_quiet
+
+    x = np.ones(16000 * 4, dtype=np.float32)
+    assert len(split_at_quiet(x, 16000)) == 1

@@ -2,6 +2,7 @@ import json
 import sys
 import time
 
+import numpy as np
 from PySide6.QtWidgets import QApplication
 
 from ttslts.controller import Controller
@@ -124,3 +125,61 @@ def test_live_voice_changer_gets_its_own_model(monkeypatch):
     live = controller.live_rvc()
     assert live is not tts and len(built) == 2  # a GPU session is only fast for one input size
     assert controller.live_rvc() is not live  # every start gets a fresh one
+
+
+def test_long_speech_is_converted_in_short_pieces(monkeypatch):
+    pieces = []
+
+    class Rvc:
+        sample_rate = 40000
+        pitch_fn = None
+
+        def convert(self, audio, shift, sid):
+            pieces.append(len(audio) / 16000)
+            return np.zeros(10, dtype=np.float32)
+
+    controller = Controller(
+        Settings(tts_through_rvc=True, tts_auto_pitch=False), save=lambda s: None
+    )
+    monkeypatch.setattr(controller, "rvc", lambda: Rvc())
+    monkeypatch.setattr(
+        controller,
+        "kokoro",
+        lambda: type("K", (), {"synthesize": lambda *a: (np.ones(24000 * 40, "f") * 0.1, 24000)})(),
+    )
+    try:
+        controller.render_tts("a very long text")
+    finally:
+        controller.shutdown()
+    assert (
+        len(pieces) >= 6 and max(pieces) <= 8
+    )  # not one 15 s lump: that held 3.9 GB of video memory
+
+
+def test_text_to_speech_model_is_released_for_the_live_voice_changer(monkeypatch):
+    controller = Controller(Settings(rvc_model_path="v.onnx"), save=lambda s: None)
+    controller._rvc, controller._rvc_key_loaded = object(), ("k",)
+    controller._release_tts_rvc()
+    assert controller._rvc is None and controller._rvc_key_loaded is None
+
+
+def test_text_to_speech_stays_on_the_cpu_while_the_live_changer_runs(monkeypatch):
+    controller = Controller(Settings(use_gpu=True), save=lambda s: None)
+    monkeypatch.setattr(controller._gpu_memory, "allowed", lambda: True)
+    assert controller._rvc_key()[3] and controller._rvc_key(live=True)[3]
+    monkeypatch.setattr(Controller, "vc_running", property(lambda self: True))
+    assert not controller._rvc_key()[3]  # text to speech: CPU, so it cannot fill the card
+    assert controller._rvc_key(live=True)[3]  # the live model keeps the GPU
+
+
+def test_idle_text_to_speech_model_is_dropped_after_a_while(monkeypatch):
+    from ttslts import controller as controller_module
+
+    monkeypatch.setattr(controller_module, "RVC_IDLE_RELEASE_S", 0.05)
+    controller = Controller(Settings(), save=lambda s: None)
+    controller._rvc, controller._rvc_key_loaded = object(), ("k",)
+    controller._rvc_idle_timer()
+    deadline = time.time() + 5
+    while controller._rvc is not None and time.time() < deadline:
+        time.sleep(0.02)
+    assert controller._rvc is None
