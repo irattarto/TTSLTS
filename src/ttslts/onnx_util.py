@@ -83,7 +83,10 @@ def _record_gpu_failure(path: str) -> int:
 
 def clear_gpu_failures() -> None:
     """Forget which models failed on the GPU, so every model tries it again."""
+    from ttslts import gpu_probe
+
     _skip_file().unlink(missing_ok=True)
+    gpu_probe.clear()
 
 
 def providers(use_gpu: bool) -> list[str]:
@@ -149,26 +152,40 @@ class ResilientSession:
         return getattr(self._session, name)
 
 
-def make_session(path: str, use_gpu: bool):
+def session_options(chosen: list[str]):
     import onnxruntime as ort
 
     opts = ort.SessionOptions()
     opts.log_severity_level = 3
+    if "DmlExecutionProvider" in chosen:
+        # Required by the DirectML provider
+        opts.enable_mem_pattern = False
+        opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    return opts
+
+
+def make_session(path: str, use_gpu: bool):
+    import onnxruntime as ort
+
     if use_gpu and path in _skip_list():
         log.info("%s is known not to run on the GPU here; using the CPU", path)
         use_gpu = False
     chosen = providers(use_gpu)
-    if "DmlExecutionProvider" in chosen:
-        # Required by the DirectML provider: with these on, a changing input size (text to
-        # speech sends a different length every time) slows every later run down.
-        opts.enable_mem_pattern = False
-        opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
+    if chosen != ["CPUExecutionProvider"]:
+        from ttslts import gpu_probe
+
+        found = gpu_probe.verdict(path, announce=_notify)  # once per model and graphics card
+        if found and found["verdict"] == gpu_probe.INCOMPATIBLE:
+            log.warning("%s does not work on this GPU (%s); using the CPU", path, found["reason"])
+            chosen = ["CPUExecutionProvider"]
+    opts = session_options(chosen)
     try:
         session = ort.InferenceSession(path, sess_options=opts, providers=chosen)
     except Exception as exc:  # no usable GPU / driver: run on the CPU instead of failing
         if chosen == ["CPUExecutionProvider"]:
             raise
         log.warning("GPU provider failed for %s (%s); using the CPU", path, exc)
+        opts = session_options(["CPUExecutionProvider"])
         session = ort.InferenceSession(path, sess_options=opts, providers=["CPUExecutionProvider"])
     log.info("Loaded %s with %s", path, session.get_providers())
     if session.get_providers()[0] != "CPUExecutionProvider":

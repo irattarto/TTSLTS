@@ -3,6 +3,7 @@ import os
 import pytest
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+os.environ.setdefault("TTSLTS_NO_GPU_PROBE", "1")  # no extra processes in tests
 
 
 @pytest.fixture(autouse=True)

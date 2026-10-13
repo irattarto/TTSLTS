@@ -13,6 +13,10 @@ args = sys.argv[1:]
 if "--version" in args:
     print(f"TTSLTS {__version__}")
     raise SystemExit(0)
+if "--gpu-probe" in args:  # checks one model on the GPU in its own process
+    from ttslts import gpu_probe
+
+    raise SystemExit(gpu_probe.main(args[args.index("--gpu-probe") + 1 :]))
 if "--selftest" in args:
     from ttslts.vc import hubert_onnx
 
