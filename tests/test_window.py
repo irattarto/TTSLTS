@@ -314,3 +314,10 @@ def test_trained_voice_fixes_speaker_id_at_zero(make_window):
     assert w.settings.speaker_id == 0
     w._on_voice_picked("elsewhere.onnx")
     assert w.speaker_spin.isEnabled()
+
+
+def test_auto_pitch_checkbox_is_on_and_saved(make_window):
+    w = make_window()
+    assert w.tts_auto_pitch_check.isChecked()
+    w.tts_auto_pitch_check.setChecked(False)
+    assert w.settings.tts_auto_pitch is False
