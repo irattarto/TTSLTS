@@ -27,7 +27,7 @@ def emit(**event) -> None:
 
 
 def run_job(job: dict) -> None:
-    from ttslts.train import hparams, prepare, trainer
+    from ttslts.train import hparams, prepare, trainer, voice_info
     from ttslts.vc import rvc_pth
 
     cfg = hparams.SAMPLE_RATES[int(job["sample_rate"])]
@@ -70,6 +70,7 @@ def run_job(job: dict) -> None:
             lambda f: emit(type="progress", stage="features", fraction=f),
         )
 
+    voice_info.write(out, name, work)  # the voice's natural pitch, for matching text to speech
     emit(type="stage", stage="train", text="Training…")
     stop_file = work / STOP_FILE
     stop_file.unlink(missing_ok=True)
