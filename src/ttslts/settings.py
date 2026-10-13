@@ -31,6 +31,7 @@ class Settings:
     tts_speed: float = 1.0
     tts_lang: str = "en-us"
     tts_through_rvc: bool = False
+    tts_auto_pitch: bool = True  # shift speech to the voice model's own pitch range
     tts_engine: str = "kokoro"  # "kokoro" or "piper"
     piper_voice: str = ""
     piper_variation: float = 0.667  # voice variation (Piper noise_scale)

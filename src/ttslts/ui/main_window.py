@@ -159,6 +159,16 @@ class MainWindow(QMainWindow):
         self.tts_rvc_check.setChecked(s.tts_through_rvc)
         self.tts_rvc_check.toggled.connect(lambda v: self._set("tts_through_rvc", v))
         form.addRow("", self.tts_rvc_check)
+        self.tts_auto_pitch_check = QCheckBox("Match the speech pitch to the voice automatically")
+        self.tts_auto_pitch_check.setChecked(s.tts_auto_pitch)
+        self.tts_auto_pitch_check.toggled.connect(lambda v: self._set("tts_auto_pitch", v))
+        self.tts_auto_pitch_check.setToolTip(
+            "A voice keeps the pitch of the speech it converts, so a high text to speech voice "
+            "becomes an unnatural, strained version of a deep voice. This shifts the speech to "
+            "the pitch range of the recordings the voice was trained on (voices trained in "
+            "TTSLTS only). The Pitch shift setting is added on top."
+        )
+        form.addRow("", self.tts_auto_pitch_check)
 
         self.tts_device_combo = self._device_combo("output", "tts_output_device")
         form.addRow("Play on", self.tts_device_combo)

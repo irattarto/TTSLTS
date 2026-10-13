@@ -348,13 +348,36 @@ class Controller(QObject):
             model = self.rvc()
             self.status.emit("Applying voice model…")
             src = resample(audio, sr, 16000)
+            shift = s.pitch_shift + (self._auto_pitch_shift(model, src) if s.tts_auto_pitch else 0)
             step = 16000 * RVC_TTS_CHUNK_S
             parts = [
-                model.convert(src[i : i + step], s.pitch_shift, s.speaker_id)
+                model.convert(src[i : i + step], shift, s.speaker_id)
                 for i in range(0, len(src), step)
             ]
             audio, sr = np.concatenate(parts), model.sample_rate
         return audio, sr
+
+    def _auto_pitch_shift(self, model, src16k: np.ndarray) -> float:
+        """Semitones that bring this speech into the voice model's natural pitch range."""
+        from ttslts.train import voice_info
+
+        info = voice_info.load(self.settings.rvc_model_path)
+        if info is None:  # a voice from elsewhere: only the manual Pitch shift applies
+            self.status.emit(
+                "This voice has no pitch information: set Pitch shift by hand if the speech "
+                "sounds unnatural (about -12 for a female speech voice into a male voice)"
+            )
+            return 0.0
+        try:
+            f0 = model.pitch_fn(src16k[: 16000 * 30])
+        except Exception as exc:  # pitch matching is a nicety, never a reason to fail
+            log.warning("Pitch matching skipped: %s", exc)
+            return 0.0
+        shift = voice_info.match_shift(f0, float(info["median_f0"]))
+        if shift is None:
+            return 0.0
+        self.status.emit(f"Pitch matched to the voice: {shift:+.1f} semitones")
+        return shift
 
     def speak(self, text: str) -> None:
         def work():
