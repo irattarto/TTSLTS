@@ -314,3 +314,11 @@ def test_trained_voice_fixes_speaker_id_at_zero(make_window):
     assert w.settings.speaker_id == 0
     w._on_voice_picked("elsewhere.onnx")
     assert w.speaker_spin.isEnabled()
+
+
+def test_latency_warns_when_processing_is_slower_than_the_chunk(make_window):
+    w = make_window(chunk_ms=200)
+    w.controller.vcLatency.emit(60.0)
+    assert w.latency_label.text() == "Processing: 60 ms per chunk"
+    w.controller.vcLatency.emit(734.0)
+    assert "too slow" in w.latency_label.text() and "200 ms" in w.latency_label.text()

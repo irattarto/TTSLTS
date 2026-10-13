@@ -400,8 +400,14 @@ class Controller(QObject):
             from ttslts.vc.realtime import RealtimeVoiceChanger
 
             s = self.settings
+            model = self.rvc()
+            if model.session.get_providers()[0] == "CPUExecutionProvider":
+                self.status.emit(
+                    "Voice changer is running on the CPU, which is usually too slow for "
+                    "real time (needs a GPU build of ONNX Runtime)"
+                )
             vc = RealtimeVoiceChanger(
-                self.rvc(),
+                model,
                 devices.resolve(s.input_device, "input"),
                 devices.resolve(s.output_device, "output"),
                 pitch_shift=lambda: self.settings.pitch_shift,
