@@ -133,8 +133,17 @@ class RvcModel:
 
     @property
     def can_skip(self) -> bool:
-        """Whether the model can decode just the newest part of what it is given."""
-        return any(n in self._inputs for n in _SKIP)
+        """Whether the model decodes just the newest part of what it is given.
+
+        Only on the CPU: on a GPU (DirectML) leaving frames out makes every run slower
+        (110-145 ms instead of 51 ms in a measurement), so the whole window is decoded there.
+        """
+        if not any(n in self._inputs for n in _SKIP):
+            return False
+        try:
+            return self.session.get_providers()[0] == "CPUExecutionProvider"
+        except (AttributeError, IndexError):
+            return False
 
     def build_feed(
         self,
@@ -191,7 +200,8 @@ class RvcModel:
                 channels = inp.shape[1] if inp.shape and isinstance(inp.shape[1], int) else 192
                 feed[name] = np.random.randn(1, channels, n).astype(_np_dtype(inp.type))
             elif name in _SKIP:
-                feed[name] = np.array([0 if wanted is None else max(0, n - wanted)], dtype=np.int64)
+                cut = max(0, n - wanted) if wanted is not None and self.can_skip else 0
+                feed[name] = np.array([cut], dtype=np.int64)
         return feed
 
     def convert(
@@ -213,6 +223,17 @@ class RvcModel:
             want = round(keep_16k * self.sample_rate / SR_16K)
             out = out[-want:] if len(out) >= want else np.pad(out, (want - len(out), 0))
         return out
+
+
+def _has_input(model_path: str, name: str) -> bool:
+    """Whether an ONNX file has an input of that name (read without starting a session)."""
+    import onnx
+
+    try:
+        graph = onnx.load(model_path, load_external_data=False).graph
+    except Exception:
+        return True  # unreadable here: let the session report the real problem
+    return any(i.name == name for i in graph.input)
 
 
 def load_rvc(
@@ -240,15 +261,14 @@ def load_rvc(
         session = make_session(rmvpe_path, use_gpu)
         # The original RVC export takes a mel spectrogram; w-okada's takes the waveform.
         pitch_fn = RmvpeMelPitch(session) if is_mel_model(session) else RmvpePitch(session)
-    session = make_session(model_path, use_gpu)
     sibling = Path(model_path).with_suffix(".pth")
-    if not any(i.name in _SKIP for i in session.get_inputs()) and sibling.exists():
+    if sibling.exists() and not _has_input(model_path, _SKIP[0]):
         # an ONNX file written by an older version: rebuild it from its .pth, which can decode
         # just the newest audio (faster for the real-time voice changer)
         from ttslts.vc.rvc_pth import UnsupportedVoice, ensure_onnx
 
         try:
-            session = make_session(ensure_onnx(str(sibling)), use_gpu)
+            model_path = ensure_onnx(str(sibling))
         except (UnsupportedVoice, OSError, ValueError) as exc:
             log.warning("Keeping %s as it is: %s", model_path, exc)
-    return RvcModel(session, contentvec, pitch_fn, fallback_sr)
+    return RvcModel(make_session(model_path, use_gpu), contentvec, pitch_fn, fallback_sr)

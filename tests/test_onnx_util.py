@@ -129,3 +129,19 @@ def test_errors_on_the_cpu_are_not_hidden(monkeypatch):
     session = onnx_util.ResilientSession("model.onnx", None, GpuSession("out of memory"))
     with pytest.raises(RuntimeError, match="bad input"):
         session.run(None, {})
+
+
+def test_a_failure_the_cpu_shares_is_not_blamed_on_the_gpu(monkeypatch):
+    class Broken:
+        def __init__(self, path, sess_options=None, providers=None):
+            pass
+
+        def run(self, outputs, feed):
+            raise RuntimeError("invalid input shape")
+
+    monkeypatch.setattr(ort, "InferenceSession", Broken)
+    session = onnx_util.ResilientSession("model.onnx", None, GpuSession("invalid input shape"))
+    for _ in range(3):
+        with pytest.raises(RuntimeError, match="invalid input"):
+            session.run(None, {})
+    assert onnx_util._skip_list() == [] and not session.on_cpu  # the input is at fault, not the GPU

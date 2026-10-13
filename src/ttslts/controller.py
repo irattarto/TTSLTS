@@ -51,7 +51,7 @@ class Controller(QObject):
         self._kokoro = None
         self._kokoro_key = None
         self._rvc = None
-        self._rvc_key = None
+        self._rvc_key_loaded = None
         self._piper = None
         self._piper_key = None
         self._vc = None
@@ -106,27 +106,49 @@ class Controller(QObject):
                 self._piper_key = key
             return self._piper
 
-    def rvc(self):
+    def _rvc_key(self) -> tuple:
         s = self.settings
-        key = (
+        return (
             s.rvc_model_path,
             s.contentvec_path,
             s.rmvpe_path,
             self.gpu_allowed(),
             s.rvc_sample_rate,
         )
-        with self._lock:
-            if self._rvc is None or self._rvc_key != key:
-                from ttslts.vc.rvc import load_rvc
 
+    def _build_rvc(self, key: tuple):
+        from ttslts.vc.rvc import load_rvc
+
+        model = load_rvc(*key)
+        model.index = self._load_index(key[0])
+        model.index_rate = self.settings.rvc_index_rate
+        model.protect = self.settings.rvc_protect
+        return model
+
+    def rvc(self):
+        """The voice model for text to speech (loaded once, reused)."""
+        s = self.settings
+        key = self._rvc_key()
+        with self._lock:
+            if self._rvc is None or self._rvc_key_loaded != key:
                 self.status.emit("Loading voice model…")
-                self._rvc = load_rvc(*key)
-                self._rvc.index = self._load_index(s.rvc_model_path)
-                self._rvc_key = key
+                self._rvc = self._build_rvc(key)
+                self._rvc_key_loaded = key
             # these two can be changed while the model stays loaded
             self._rvc.index_rate = s.rvc_index_rate
             self._rvc.protect = s.rvc_protect
             return self._rvc
+
+    def live_rvc(self):
+        """A voice model of its own for the real-time voice changer.
+
+        A GPU session (DirectML) is only fast for the first input size it sees; every other size
+        is several times slower on every run. Text to speech feeds the shared model different
+        lengths all the time, so the voice changer, which always feeds the same size, gets a
+        fresh model and stays fast (measured: 68 ms instead of 603 ms per chunk).
+        """
+        self.status.emit("Loading voice model for the voice changer…")
+        return self._build_rvc(self._rvc_key())
 
     @staticmethod
     def _load_index(model_path: str):
@@ -333,7 +355,7 @@ class Controller(QObject):
             self.status.emit("Voice changer stopped: the graphics card is needed for training")
         with self._lock:
             self._kokoro = self._piper = self._rvc = None
-            self._kokoro_key = self._piper_key = self._rvc_key = None
+            self._kokoro_key = self._piper_key = self._rvc_key_loaded = None
 
     def _read_training(self, proc: subprocess.Popen, log_file, work: Path) -> None:
         last_error = ""
@@ -477,7 +499,7 @@ class Controller(QObject):
             from ttslts.vc.realtime import RealtimeVoiceChanger
 
             s = self.settings
-            model = self.rvc()
+            model = self.live_rvc()
             if model.session.get_providers()[0] == "CPUExecutionProvider":
                 self.status.emit(
                     "Voice changer is running on the CPU, which is usually too slow for "

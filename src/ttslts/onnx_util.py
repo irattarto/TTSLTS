@@ -132,22 +132,18 @@ class ResilientSession:
             return self._session.run(*args, **kwargs)
         except Exception as exc:
             transient = is_transient(exc)
-            count = 0 if transient else _record_gpu_failure(self._path)
-            log.warning(
-                "GPU run failed for %s (%s); using the CPU for %.0f s (failure %d)",
-                self._path,
-                exc,
-                CPU_BACKOFF_S,
-                count,
-            )
+            log.warning("GPU run failed for %s (%s); trying the CPU", self._path, exc)
+            result = self._cpu_session().run(*args, **kwargs)  # raises if the input is at fault
+            count = 0 if transient else _record_gpu_failure(self._path)  # only the GPU failed
             self._cpu_until = time.monotonic() + CPU_BACKOFF_S
+            log.warning("Using the CPU for %.0f s (GPU failure count %d)", CPU_BACKOFF_S, count)
             if _notify is not None:
                 _notify(
                     "The graphics card is busy or out of memory: using the CPU for a moment"
                     if transient
                     else "A model could not run on the GPU: using the CPU (slower)"
                 )
-            return self._cpu_session().run(*args, **kwargs)
+            return result
 
     def __getattr__(self, name: str):
         return getattr(self._session, name)
@@ -162,6 +158,11 @@ def make_session(path: str, use_gpu: bool):
         log.info("%s is known not to run on the GPU here; using the CPU", path)
         use_gpu = False
     chosen = providers(use_gpu)
+    if "DmlExecutionProvider" in chosen:
+        # Required by the DirectML provider: with these on, a changing input size (text to
+        # speech sends a different length every time) slows every later run down.
+        opts.enable_mem_pattern = False
+        opts.execution_mode = ort.ExecutionMode.ORT_SEQUENTIAL
     try:
         session = ort.InferenceSession(path, sess_options=opts, providers=chosen)
     except Exception as exc:  # no usable GPU / driver: run on the CPU instead of failing
