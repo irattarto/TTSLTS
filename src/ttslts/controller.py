@@ -18,6 +18,7 @@ from ttslts import onnx_util, paths
 from ttslts.audio import devices
 from ttslts.audio.dsp import resample
 from ttslts.audio.wav import write_wav
+from ttslts.gpu_memory import GpuMemoryGate
 from ttslts.settings import Settings
 
 log = logging.getLogger(__name__)
@@ -56,6 +57,7 @@ class Controller(QObject):
         self._piper_key = None
         self._vc = None
         self._train_proc: subprocess.Popen | None = None
+        self._gpu_memory = GpuMemoryGate()
         onnx_util.set_fallback_notifier(self.status.emit)
         self._train_work: Path | None = None
 
@@ -71,9 +73,10 @@ class Controller(QObject):
         """Whether the app's own models may use the GPU right now.
 
         Training keeps the graphics card busy (and nearly all its memory), so while it runs the
-        speech and voice models stay on the CPU; they move back to the GPU afterwards.
+        speech and voice models stay on the CPU; they move back to the GPU afterwards. The same
+        goes while something else (a game) has filled the card's memory.
         """
-        return self.settings.use_gpu and not self.training
+        return self.settings.use_gpu and not self.training and self._gpu_memory.allowed()
 
     def kokoro(self):
         s = self.settings
