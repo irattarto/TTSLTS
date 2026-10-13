@@ -24,6 +24,15 @@ class Tray(QSystemTrayIcon):
         self.clip_action = QAction("Speak clipboard", menu, triggered=self._speak_clipboard)
         self.stop_action = QAction("Stop speaking", menu, triggered=controller.stop_speaking)
         self.quit_action = QAction("Quit", menu, triggered=self.window.quit)
+        for action, tip in (
+            (self.show_action, "Show the TTSLTS window"),
+            (self.vc_action, "Turn the real-time voice changer on or off"),
+            (self.clip_action, "Read the text currently on the clipboard aloud"),
+            (self.stop_action, "Stop the speech that is playing"),
+            (self.quit_action, "Exit TTSLTS completely (closing the window only hides it)"),
+        ):
+            action.setToolTip(tip)
+        menu.setToolTipsVisible(True)
         for a in (
             self.show_action,
             None,

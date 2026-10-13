@@ -49,6 +49,97 @@ from ttslts.tts.piper_download import (
 
 DEFAULT_DEVICE = "System default"
 
+PERFORMANCE_HELP = {
+    "chunk_ms": (
+        "How much microphone sound is converted at a time. Smaller means less delay but needs "
+        "a faster computer; raise it if the voice crackles or breaks up."
+    ),
+    "context_ms": (
+        "How much earlier sound the model also hears each time. More is smoother and more "
+        "natural but slower; 0 is fastest."
+    ),
+    "crossfade_ms": "How long neighbouring chunks are blended together to hide the joins.",
+}
+
+# Help for controls that are created without a tip of their own (see _apply_tooltips).
+TIPS = {
+    "text_edit": "The text to read aloud.",
+    "voice_combo": (
+        "The Kokoro voice. The first letters tell language and gender, for example af = "
+        "American female, bm = British male. You can also type a voice name."
+    ),
+    "lang_combo": (
+        "The language Kokoro reads the text in. Choosing Hungarian switches to the Piper "
+        "engine, which has real Hungarian voices."
+    ),
+    "tts_rvc_check": (
+        "Run the speech through your RVC voice model, so the text is read in your own custom "
+        "voice. Needs a Voice model and ContentVec (Settings > Models)."
+    ),
+    "tts_device_combo": (
+        "Where the speech is played. Choose a virtual cable to send speech into Discord, "
+        "games or OBS."
+    ),
+    "speak_btn": "Read the text aloud now.",
+    "stop_btn": "Stop the speech that is playing.",
+    "save_btn": "Save the speech as a WAV file instead of playing it.",
+    "input_combo": "The microphone whose voice is changed.",
+    "output_combo": (
+        "Where the changed voice goes. A virtual cable (for example VB-Audio CABLE Input) lets "
+        "other apps use it as a microphone; headphones let you hear it yourself."
+    ),
+    "pitch_spin": (
+        "Raises or lowers the voice in semitones (12 = one octave). It brings a voice into the "
+        "voice model's range, for example -12 for a female voice into a male voice. It applies "
+        "to the voice changer and to text to speech through the voice model."
+    ),
+    "vc_button": (
+        "Start or stop changing your microphone voice in real time. Delay and quality are set "
+        "in Settings > Performance."
+    ),
+    "latency_label": (
+        "How long the computer needs for each chunk; it must stay below the chunk size."
+    ),
+    "train_files": (
+        "The recordings to train on (mp3, wav, flac, ogg): one person speaking clearly, "
+        "without music or noise."
+    ),
+    "train_add_btn": "Choose recordings to train on.",
+    "train_remove_btn": "Remove the selected recordings from the list.",
+    "train_start_btn": (
+        "Cut the recordings into clips, analyse them and train the voice. The first time, the "
+        "training environment and the pretrained models are downloaded after you accept."
+    ),
+    "train_stop_btn": (
+        "Stop after saving the voice made so far. Start the same name again to continue."
+    ),
+    "train_use_btn": (
+        "Select the voice that was just trained as the voice model for the voice changer and "
+        "for text to speech."
+    ),
+    "train_folder_btn": "Open the folder with the trained voice files (.pth and .onnx).",
+    "train_bar": "Progress of the current step.",
+    "train_log": (
+        "What training is doing, and the result of each epoch. mel is how far the sound is "
+        "from your recordings: lower is better."
+    ),
+    "minimize_check": "Minimizing hides the window to the system tray instead of the taskbar.",
+    "close_check": (
+        "The close button hides the window to the tray; use Quit in the tray menu to exit."
+    ),
+    "start_min_check": "Start with only the tray icon showing.",
+    "kokoro_model_edit": "The Kokoro speech model file (kokoro-v1.0.onnx).",
+    "kokoro_voices_edit": "The Kokoro voices file (voices-v1.0.bin).",
+    "contentvec_edit": (
+        "ContentVec reads what is being said. It is needed by the voice changer, by text to "
+        "speech through a voice, and by training. The download button below fetches it."
+    ),
+    "rmvpe_edit": (
+        "RMVPE tracks the pitch of the voice more accurately than the built-in estimator. "
+        "Optional, but recommended."
+    ),
+}
+
 
 class MainWindow(QMainWindow):
     def __init__(self, controller: Controller, tray_available: bool = True):
@@ -72,6 +163,7 @@ class MainWindow(QMainWindow):
         self.tabs = tabs
         self.setCentralWidget(tabs)
         self.statusBar().showMessage("Ready")
+        self._apply_tooltips()
 
         c = controller
         c.status.connect(self.statusBar().showMessage)
@@ -177,11 +269,11 @@ class MainWindow(QMainWindow):
         buttons = QHBoxLayout()
         self.speak_btn = QPushButton("Speak")
         self.speak_btn.clicked.connect(lambda: self.controller.speak(self.text_edit.toPlainText()))
-        stop_btn = QPushButton("Stop")
-        stop_btn.clicked.connect(self.controller.stop_speaking)
+        self.stop_btn = QPushButton("Stop")
+        self.stop_btn.clicked.connect(self.controller.stop_speaking)
         self.save_btn = QPushButton("Save WAV…")
         self.save_btn.clicked.connect(self._save_wav)
-        for b in (self.speak_btn, stop_btn, self.save_btn):
+        for b in (self.speak_btn, self.stop_btn, self.save_btn):
             buttons.addWidget(b)
         layout.addLayout(buttons)
         self._refresh_piper_voices()
@@ -373,6 +465,10 @@ class MainWindow(QMainWindow):
             ml, "Kokoro voices", "kokoro_voices_path", "Voices (*.bin *.npz)"
         )
         dl = QPushButton("Download Kokoro (~340 MB)")
+        dl.setToolTip(
+            "Download the Kokoro speech model and its 54 voices (Apache-2.0) from the "
+            "original project to this computer; used for text to speech in 9 languages"
+        )
         dl.clicked.connect(self.controller.download_kokoro)
         ml.addRow("", dl)
         self.rvc_model_edit = self._path_row(
@@ -408,6 +504,11 @@ class MainWindow(QMainWindow):
         gpu = QCheckBox("Use GPU (CUDA / DirectML) when available")
         gpu.setChecked(s.use_gpu)
         gpu.toggled.connect(lambda v: self._set("use_gpu", v))
+        gpu.setToolTip(
+            "Run the models on the graphics card (CUDA on NVIDIA, DirectML on any Windows "
+            "GPU) when one is available. The real-time voice changer needs this; on the CPU "
+            "it is too slow. Applies the next time a model is loaded."
+        )
         pl.addRow("", gpu)
         for label, key, lo, hi, suffix in (
             ("Chunk size", "chunk_ms", 50, 1000, " ms"),
@@ -417,10 +518,16 @@ class MainWindow(QMainWindow):
             spin = QSpinBox(minimum=lo, maximum=hi, suffix=suffix, singleStep=10)
             spin.setValue(getattr(s, key))
             spin.valueChanged.connect(lambda v, k=key: self._set(k, v))
+            spin.setToolTip(PERFORMANCE_HELP[key])
             pl.addRow(label, spin)
         gate = QDoubleSpinBox(minimum=-90, maximum=0, suffix=" dB", singleStep=1)
         gate.setValue(s.silence_threshold_db)
         gate.valueChanged.connect(lambda v: self._set("silence_threshold_db", float(v)))
+        gate.setToolTip(
+            "Microphone sound quieter than this is treated as silence and not converted, "
+            "which saves processing and keeps background noise out. Raise it if noise comes "
+            "through, lower it if quiet speech is cut off."
+        )
         pl.addRow("Silence gate", gate)
         layout.addWidget(perf_box)
         layout.addWidget(QLabel("Voice changer changes apply the next time it starts."))
@@ -428,6 +535,24 @@ class MainWindow(QMainWindow):
         return w
 
     # -- helpers ---------------------------------------------------------
+    def _apply_tooltips(self) -> None:
+        """Give every control a hover help; rows share their field's help with their label."""
+        for name, tip in TIPS.items():
+            widget = getattr(self, name)
+            if not widget.toolTip():
+                widget.setToolTip(tip)
+        for form in self.findChildren(QFormLayout):
+            for row in range(form.rowCount()):
+                label = form.itemAt(row, QFormLayout.ItemRole.LabelRole)
+                field = form.itemAt(row, QFormLayout.ItemRole.FieldRole)
+                if label is None or field is None or label.widget() is None:
+                    continue
+                widget = field.widget()
+                if widget is None and field.layout() is not None and field.layout().count():
+                    widget = field.layout().itemAt(0).widget()
+                if widget is not None and widget.toolTip():
+                    label.widget().setToolTip(widget.toolTip())
+
     def _set(self, key: str, value) -> None:
         setattr(self.settings, key, value)
         self.controller.save_settings()
@@ -515,6 +640,7 @@ class MainWindow(QMainWindow):
         edit = QLineEdit(getattr(self.settings, key))
         edit.editingFinished.connect(lambda: self._set(key, edit.text().strip()))
         browse = QToolButton(text="…")
+        browse.setToolTip(f"Browse for the {label.lower()} file")
 
         def pick():
             path, _ = QFileDialog.getOpenFileName(self, label, edit.text(), filt)
