@@ -66,6 +66,8 @@ You supply the models (they are never bundled or committed):
 
 Then on the **Voice Changer** tab pick your microphone and output and press **Start**. To use the changed voice in other apps, set Output to a virtual cable such as [VB-Audio CABLE](https://vb-audio.com/Cable/) (*CABLE Input*) and select *CABLE Output* as the microphone in the other app.
 
+**Index rate** and **Protect consonants** (Voice Changer tab) make a voice trained in TTSLTS clearer and closer to the real recordings: training saves the features of your recordings next to the voice (`<name>.index.npy`, made on first use for older voices), and each frame of the converted speech is mixed with its closest real frames. Index rate 0.3-0.7 is a good range (0 switches it off, too high can sound rough); Protect keeps s, sh, f and breath sounds clear. Voices from elsewhere have no index, so these two do nothing for them. Joins between chunks are lined up with SOLA, and only the newest part of each chunk is synthesized, which keeps the delay and the load down.
+
 Latency is roughly chunk size + crossfade + processing time. Lower **Chunk size** for less delay, raise it if the voice crackles. **Context** is how much earlier audio the model sees each time (more is smoother but slower). The **Processing** readout should stay well under the chunk size.
 
 ### Train your own voice
@@ -76,7 +78,7 @@ The **Train** tab makes an RVC v2 voice from recordings of one speaker, in the i
 2. On the **Train** tab add your recordings (mp3, wav, flac, ogg). Use clean speech of one person without music or noise; about 10 minutes gives a good voice and 2-3 minutes already works.
 3. Give the voice a name, pick the sample rate (40 kHz is the usual choice), epochs (100-300 for a few minutes of audio) and batch size (lower it if the GPU runs out of memory), then **Start training**. The first time you are asked to accept the terms and download the pretrained RVC v2 models (about 215 MB) that training starts from.
 4. Training cuts the recordings at pauses, extracts ContentVec features and pitch, and fine-tunes the pretrained model. The voice file is refreshed every *Save every* epochs, so you can try it before training ends. **Stop** saves and ends early; starting the same name again offers to continue where it stopped.
-5. The result is saved to `%APPDATA%\TTSLTS\voices\<name>\` as `<name>.pth` (the format voices are shared in, works in other RVC tools) and `<name>.onnx`. **Use this voice** selects it for the voice changer and for *Speak with my voice model*.
+5. The result is saved to `%APPDATA%\TTSLTS\voices\<name>\` as `<name>.pth` (the format voices are shared in, works in other RVC tools) and `<name>.onnx`, plus `<name>.index.npy` (the voice index) and `<name>.json` (the voice's natural pitch). **Use this voice** selects it for the voice changer and for *Speak with my voice model*.
 
 Training runs in a separate process (`python -m ttslts.train.run`, from the app's bundled sources in the installed app); its log is `%APPDATA%\TTSLTS\train\<name>\train.log`. Only train on voices you have permission to use.
 

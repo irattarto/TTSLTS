@@ -55,6 +55,7 @@ def compare(name: str, torch_model, state, cfg, frames: int) -> None:
         "pitch": rng.integers(1, 255, (1, frames)).astype(np.int64),
         "nsff0": f0,
         "sid": np.array([2], dtype=np.int64),
+        "skip": np.zeros(1, dtype=np.int64),
         "rnd": rnd,
     }
     mine = session.run(None, feed)[0]

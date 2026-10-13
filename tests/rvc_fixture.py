@@ -110,5 +110,6 @@ def feed(config=None, frames: int = 9, seed: int = 1) -> dict:
         "pitch": rng.integers(1, 255, (1, frames)).astype(np.int64),
         "nsff0": f0,
         "sid": np.array([1], dtype=np.int64),
+        "skip": np.zeros(1, dtype=np.int64),
         "rnd": rng.standard_normal((1, config[2], frames)).astype(np.float32),
     }

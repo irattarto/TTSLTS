@@ -348,15 +348,20 @@ def build_model(state: dict, cfg: RvcConfig, noise: bool = True):
         m = conv(h, f"{p}.post", pads=[0, 0])
         z = op("Concat", [x0, op("Sub", [x1, m])], axis=1)
 
+    # ---- only decode the frames from "skip" on (the voice changer needs just the newest) ----
+    z = op("Slice", [z, "skip", i64([2**31 - 1]), i64([2])])
+    nsff0_dec = op("Slice", ["nsff0", "skip", i64([2**31 - 1]), i64([1])])
+    dec_frames = op("Sub", [frames_vec, "skip"])
+
     # ---- NSF source (single harmonic) ---------------------------------------------------------
     upp = cfg.upp
     sr = float(cfg.sample_rate)
     f0 = op(
-        "Unsqueeze", [op("Unsqueeze", [op("Squeeze", ["nsff0", i64([0])]), i64([0])]), i64([0])]
+        "Unsqueeze", [op("Unsqueeze", [op("Squeeze", [nsff0_dec, i64([0])]), i64([0])]), i64([0])]
     )  # (1,1,T)
     rad = op("Mod", [op("Div", [f0, f32(sr)]), f32(1.0)], fmod=1)
     phase = op("Mul", [op("CumSum", [rad, i64(2)]), f32(float(upp))])
-    out_len = op("Mul", [frames_vec, i64([upp])])
+    out_len = op("Mul", [dec_frames, i64([upp])])
     sizes4 = op("Concat", [i64([1, 1, 1]), out_len], axis=0)
     empty = init("empty", np.zeros(0, dtype=np.float32))
 
@@ -459,6 +464,8 @@ def build_model(state: dict, cfg: RvcConfig, noise: bool = True):
             helper.make_tensor_value_info("nsff0", float_t, [1, "frames"]),
             helper.make_tensor_value_info("sid", TensorProto.INT64, [1]),
             helper.make_tensor_value_info("rnd", float_t, [1, ic, "frames"]),
+            # frames dropped from the start before decoding (0 decodes everything)
+            helper.make_tensor_value_info("skip", TensorProto.INT64, [1]),
         ],
         [helper.make_tensor_value_info("audio", float_t, [1, 1, "samples"])],
         initializer=inits,
@@ -499,7 +506,7 @@ def ensure_onnx(pth_path: str, cache_dir: str | None = None) -> str:
         cache = models_dir() / "voices"
     else:
         cache = Path(cache_dir)
-    out = cache / f"{src.stem}-{digest[:10]}.onnx"
+    out = cache / f"{src.stem}-{digest[:10]}-v2.onnx"  # v2: graph with the skip input
     if out.exists():
         return str(out)
     cache.mkdir(parents=True, exist_ok=True)

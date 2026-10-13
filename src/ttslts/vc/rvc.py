@@ -16,6 +16,7 @@ import json
 import logging
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 import numpy as np
 
@@ -33,6 +34,8 @@ _PITCH = ("pitch",)
 _PITCHF = ("pitchf", "nsff0")
 _SID = ("sid", "ds")
 _NOISE = ("rnd",)
+_SKIP = ("skip",)  # frames to leave out of decoding (voices made by TTSLTS only)
+DECODER_MARGIN = 12  # frames (10 ms) of left context the decoder still needs
 
 
 def _np_dtype(onnx_type: str):
@@ -117,7 +120,7 @@ class RvcModel:
         self.protect = 0.33  # 0..0.5: keeps unvoiced consonants clear when the index is used
         self.info = read_info(session, fallback_sr)
         self._inputs = {i.name: i for i in session.get_inputs()}
-        known = set(_FEATS + _LENGTHS + _PITCH + _PITCHF + _SID + _NOISE)
+        known = set(_FEATS + _LENGTHS + _PITCH + _PITCHF + _SID + _NOISE + _SKIP)
         unknown = [n for n in self._inputs if n not in known]
         if unknown:
             raise ValueError(f"Unrecognised RVC ONNX inputs: {unknown}")
@@ -128,15 +131,34 @@ class RvcModel:
     def sample_rate(self) -> int:
         return self.info.sample_rate
 
+    @property
+    def can_skip(self) -> bool:
+        """Whether the model can decode just the newest part of what it is given."""
+        return any(n in self._inputs for n in _SKIP)
+
     def build_feed(
-        self, audio16k: np.ndarray, pitch_shift: float = 0.0, speaker_id: int = 0
+        self,
+        audio16k: np.ndarray,
+        pitch_shift: float = 0.0,
+        speaker_id: int = 0,
+        keep_16k: int | None = None,
     ) -> dict:
+        """Model inputs for ``audio16k``; with ``keep_16k`` only that many newest 16 kHz samples
+        of output are needed, so the older frames are neither indexed nor decoded."""
         feats = self.contentvec(audio16k)
         original = feats
+        wanted = None  # frames (10 ms) from the end that must be produced
+        if keep_16k is not None:
+            wanted = -(-keep_16k // HOP_16K) + DECODER_MARGIN
         use_index = self.index is not None and self.index_rate > 0
         if use_index:
-            retrieved = self.index.search(feats[0])[None]
-            feats = self.index_rate * retrieved + (1.0 - self.index_rate) * feats
+            first = 0 if wanted is None else max(0, feats.shape[1] - wanted // 2 - 1)
+            mixed = feats.copy()
+            retrieved = self.index.search(feats[0, first:])[None]
+            mixed[:, first:] = (
+                self.index_rate * retrieved + (1.0 - self.index_rate) * feats[:, first:]
+            )
+            feats = mixed
         feats = np.repeat(feats, 2, axis=1)  # 20 ms -> 10 ms frames
         original = np.repeat(original, 2, axis=1)
         n = feats.shape[1]
@@ -168,17 +190,29 @@ class RvcModel:
             elif name in _NOISE:
                 channels = inp.shape[1] if inp.shape and isinstance(inp.shape[1], int) else 192
                 feed[name] = np.random.randn(1, channels, n).astype(_np_dtype(inp.type))
+            elif name in _SKIP:
+                feed[name] = np.array([0 if wanted is None else max(0, n - wanted)], dtype=np.int64)
         return feed
 
     def convert(
-        self, audio16k: np.ndarray, pitch_shift: float = 0.0, speaker_id: int = 0
+        self,
+        audio16k: np.ndarray,
+        pitch_shift: float = 0.0,
+        speaker_id: int = 0,
+        keep_16k: int | None = None,
     ) -> np.ndarray:
+        """Convert speech. With ``keep_16k`` only the newest ``keep_16k / 16000`` seconds of the
+        result are returned (and, if the model allows, only those are computed)."""
         audio16k = np.asarray(audio16k, dtype=np.float32)
         if len(audio16k) < HOP_16K * 4:
             return np.zeros(0, dtype=np.float32)
-        feed = self.build_feed(audio16k, pitch_shift, speaker_id)
+        feed = self.build_feed(audio16k, pitch_shift, speaker_id, keep_16k)
         out = self.session.run(None, feed)[0]
-        return np.asarray(out, dtype=np.float32).reshape(-1)
+        out = np.asarray(out, dtype=np.float32).reshape(-1)
+        if keep_16k is not None:
+            want = round(keep_16k * self.sample_rate / SR_16K)
+            out = out[-want:] if len(out) >= want else np.pad(out, (want - len(out), 0))
+        return out
 
 
 def load_rvc(
@@ -206,4 +240,15 @@ def load_rvc(
         session = make_session(rmvpe_path, use_gpu)
         # The original RVC export takes a mel spectrogram; w-okada's takes the waveform.
         pitch_fn = RmvpeMelPitch(session) if is_mel_model(session) else RmvpePitch(session)
-    return RvcModel(make_session(model_path, use_gpu), contentvec, pitch_fn, fallback_sr)
+    session = make_session(model_path, use_gpu)
+    sibling = Path(model_path).with_suffix(".pth")
+    if not any(i.name in _SKIP for i in session.get_inputs()) and sibling.exists():
+        # an ONNX file written by an older version: rebuild it from its .pth, which can decode
+        # just the newest audio (faster for the real-time voice changer)
+        from ttslts.vc.rvc_pth import UnsupportedVoice, ensure_onnx
+
+        try:
+            session = make_session(ensure_onnx(str(sibling)), use_gpu)
+        except (UnsupportedVoice, OSError, ValueError) as exc:
+            log.warning("Keeping %s as it is: %s", model_path, exc)
+    return RvcModel(session, contentvec, pitch_fn, fallback_sr)
