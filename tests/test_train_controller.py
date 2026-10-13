@@ -93,3 +93,14 @@ def test_training_start_frees_loaded_models():
     controller._rvc, controller._rvc_key = object(), ("c",)
     controller._release_gpu_models()
     assert controller._kokoro is None and controller._rvc is None and controller._rvc_key is None
+
+
+def test_retry_gpu_clears_what_was_remembered(monkeypatch):
+    from ttslts import onnx_util
+
+    cleared = []
+    monkeypatch.setattr(onnx_util, "clear_gpu_failures", lambda: cleared.append(True))
+    controller = Controller(Settings(), save=lambda s: None)
+    controller._kokoro, controller._kokoro_key = object(), ("a",)
+    controller.retry_gpu()
+    assert cleared and controller._kokoro is None
