@@ -10,7 +10,7 @@ Everything runs locally through ONNX Runtime (training uses PyTorch). Nothing is
 
 ## Install
 
-Requires Python 3.10–3.13. An NVIDIA GPU is recommended for the voice changer; text to speech runs fine on CPU.
+Requires Python 3.10–3.13. A GPU is needed for the real-time voice changer (a CPU is about four times too slow); text to speech runs fine on CPU. The Windows installer and portable build use the GPU through DirectML, which works with NVIDIA, AMD and Intel graphics cards.
 
 ```bat
 python -m venv .venv
@@ -21,6 +21,10 @@ pip install -e .
 pip install -e .[gpu]
 pip uninstall -y onnxruntime
 pip install --force-reinstall --no-deps onnxruntime-gpu
+
+:: or any Windows GPU (NVIDIA, AMD, Intel) with DirectML instead of CUDA
+pip uninstall -y onnxruntime
+pip install onnxruntime-directml
 ```
 
 Run it with `ttslts` (or `pythonw -m ttslts` to start without a console window).

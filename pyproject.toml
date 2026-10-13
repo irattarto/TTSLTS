@@ -23,6 +23,8 @@ dependencies = [
 # For NVIDIA GPUs: install this extra, then `pip uninstall onnxruntime` so the
 # CUDA build is the one that gets imported (see README).
 gpu = ["onnxruntime-gpu>=1.17"]
+# For any GPU on Windows (NVIDIA, AMD, Intel) through DirectML; also `pip uninstall onnxruntime`.
+directml = ["onnxruntime-directml>=1.17"]
 # Train your own voice (Train tab). Install a CUDA build of PyTorch first for GPU training:
 #   pip install torch --index-url https://download.pytorch.org/whl/cu126
 train = ["torch>=2.1", "soundfile>=0.12"]
