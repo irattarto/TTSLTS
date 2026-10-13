@@ -109,3 +109,38 @@ def test_weight_norm_forms_agree():
     )
     assert np.allclose(old, new)
     assert np.allclose(np.sqrt((old**2).sum(axis=(1, 2))), [2.0, 0.5], atol=1e-5)
+
+
+def test_skip_decodes_only_the_newest_frames():
+    state, cfg = rvc_pth.validate(random_voice())
+    session = _session(rvc_pth.build_model(state, cfg, noise=False))
+    assert "skip" in [i.name for i in session.get_inputs()]
+    full = session.run(None, feed())[0]  # skip = 0 decodes everything
+    assert full.shape[-1] == 72
+    part = session.run(None, {**feed(), "skip": np.array([4], dtype=np.int64)})[0]
+    assert part.shape[-1] == (9 - 4) * 8 and np.isfinite(part).all()
+
+
+def test_convert_returns_just_the_newest_audio_when_asked(tmp_path):
+    path = _save(tmp_path, random_voice())
+    session = ort.InferenceSession(
+        rvc_pth.ensure_onnx(path, str(tmp_path / "cache")), providers=["CPUExecutionProvider"]
+    )
+    model = RvcModel(session, ContentVec(fake_contentvec()))
+    assert model.can_skip
+    audio = np.random.default_rng(0).standard_normal(16000).astype(np.float32) * 0.1
+    full = model.convert(audio)
+    part = model.convert(audio, keep_16k=400)
+    assert len(part) == 400 < len(full) and np.isfinite(part).all()
+    assert model.build_feed(audio, keep_16k=400)["skip"][0] > 0  # older frames not decoded
+
+
+def test_models_without_skip_are_trimmed_to_the_newest_audio():
+    from fakes import rvc_session
+
+    model = RvcModel(
+        rvc_session(["feats", "p_len", "pitch", "pitchf", "sid"]), ContentVec(fake_contentvec())
+    )
+    assert not model.can_skip
+    audio = np.random.default_rng(0).standard_normal(16000).astype(np.float32) * 0.1
+    assert len(model.convert(audio, keep_16k=3200)) == round(3200 * 40000 / 16000)

@@ -20,15 +20,20 @@ SR_16K = 16000
 class StreamConverter:
     """Turns fixed-size input blocks into converted output blocks.
 
-    Each call converts the new block together with some preceding audio (context)
-    so the model sees enough speech, keeps only the newest part of the result and
-    crossfades it with the tail of the previous block. Output is delayed by the
-    crossfade length.
+    Each call converts the new block together with some preceding audio (context) so the model
+    sees enough speech, and keeps only the newest part of the result. Neighbouring blocks are
+    joined with SOLA: the start of the new block is moved a few milliseconds (up to ``sola_ms``)
+    to where its waveform lines up best with the end of the previous block, then the two are
+    crossfaded. That hides the joins that a plain crossfade leaves as a buzz. Output is delayed
+    by the crossfade length (plus up to ``sola_ms``).
+
+    ``convert(window_16k, keep_16k)`` must return the newest ``keep_16k / 16000`` seconds of the
+    converted window (a model that cannot skip may return all of it).
     """
 
     def __init__(
         self,
-        convert: Callable[[np.ndarray], np.ndarray],
+        convert: Callable[[np.ndarray, int], np.ndarray],
         model_sr: int,
         in_sr: int,
         out_sr: int,
@@ -36,6 +41,7 @@ class StreamConverter:
         context_ms: int = 600,
         crossfade_ms: int = 40,
         silence_db: float = -50.0,
+        sola_ms: int = 12,
     ):
         self.convert = convert
         self.model_sr = model_sr
@@ -46,10 +52,28 @@ class StreamConverter:
         self.chunk_out = out_sr * chunk_ms // 1000
         self.xfade_16k = SR_16K * crossfade_ms // 1000
         self.xfade_out = out_sr * crossfade_ms // 1000
-        self.history_16k = SR_16K * context_ms // 1000 + self.xfade_16k
+        self.sola_16k = SR_16K * sola_ms // 1000
+        self.sola_out = out_sr * sola_ms // 1000
+        self.history_16k = SR_16K * context_ms // 1000 + self.xfade_16k + self.sola_16k
+        self.keep_16k = self.chunk_16k + self.xfade_16k + self.sola_16k
+        self.need_out = self.chunk_out + self.xfade_out + self.sola_out
         self.silence_db = silence_db
         self._history = np.zeros(self.history_16k, dtype=np.float32)
         self._tail = np.zeros(self.xfade_out, dtype=np.float32)
+
+    def _best_offset(self, segment: np.ndarray) -> int:
+        """Start (0..sola_out) in ``segment`` whose waveform best continues the previous tail."""
+        if self.sola_out == 0 or self.xfade_out == 0:
+            return self.sola_out
+        tail = self._tail
+        if float(np.dot(tail, tail)) < 1e-9:
+            return self.sola_out  # nothing to line up with (start, or after silence)
+        span = segment[: self.sola_out + self.xfade_out]
+        corr = np.correlate(span, tail, mode="valid")
+        energy = np.convolve(span * span, np.ones(self.xfade_out, dtype=np.float32), "valid")
+        score = corr / np.sqrt(energy + 1e-9)
+        # among equally good offsets prefer the latest, which is the least delayed
+        return self.sola_out - int(np.argmax(score[::-1]))
 
     def process(self, block: np.ndarray) -> np.ndarray:
         block = to_mono(block)
@@ -58,19 +82,19 @@ class StreamConverter:
         self._history = window[-self.history_16k :] if self.history_16k else self._history
 
         if rms_db(block) < self.silence_db:
-            out_seg = np.zeros(self.chunk_out + self.xfade_out, dtype=np.float32)
+            segment = np.zeros(self.need_out, dtype=np.float32)
         else:
-            converted = self.convert(window)
-            converted = resample(converted, self.model_sr, self.out_sr)
-            expected = round(len(window) * self.out_sr / SR_16K)
-            converted = fit_length(converted, expected)
-            out_seg = converted[-(self.chunk_out + self.xfade_out) :]
-            out_seg = fit_length(out_seg, self.chunk_out + self.xfade_out)
+            converted = resample(self.convert(window, self.keep_16k), self.model_sr, self.out_sr)
+            segment = converted[-self.need_out :]
+            if len(segment) < self.need_out:  # short output: keep it at the end of the block
+                segment = np.pad(segment, (self.need_out - len(segment), 0))
 
-        emitted = out_seg[: self.chunk_out].copy()
+        start = self._best_offset(segment)
+        piece = segment[start : start + self.chunk_out + self.xfade_out]
+        emitted = piece[: self.chunk_out].copy()
         n = min(self.xfade_out, self.chunk_out)
         emitted[:n] = crossfade(self._tail[:n], emitted[:n])
-        self._tail = out_seg[self.chunk_out :].copy()
+        self._tail = piece[self.chunk_out :].copy()
         return emitted
 
 
@@ -137,7 +161,7 @@ class RealtimeVoiceChanger:
         in_sr = int(sd.query_devices(self.input_device, "input")["default_samplerate"])
         out_sr = int(sd.query_devices(self.output_device, "output")["default_samplerate"])
         converter = StreamConverter(
-            lambda x: self.model.convert(x, self.pitch_shift(), self.speaker_id),
+            lambda x, keep: self.model.convert(x, self.pitch_shift(), self.speaker_id, keep),
             self.model.sample_rate,
             in_sr,
             out_sr,
