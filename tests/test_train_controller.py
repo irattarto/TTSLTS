@@ -90,9 +90,13 @@ def test_models_stay_off_the_gpu_while_training(monkeypatch):
 def test_training_start_frees_loaded_models():
     controller = Controller(Settings(), save=lambda s: None)
     controller._kokoro, controller._kokoro_key = object(), ("a", "b", True)
-    controller._rvc, controller._rvc_key = object(), ("c",)
+    controller._rvc, controller._rvc_key_loaded = object(), ("c",)
     controller._release_gpu_models()
-    assert controller._kokoro is None and controller._rvc is None and controller._rvc_key is None
+    assert (
+        controller._kokoro is None
+        and controller._rvc is None
+        and controller._rvc_key_loaded is None
+    )
 
 
 def test_retry_gpu_clears_what_was_remembered(monkeypatch):
@@ -104,3 +108,19 @@ def test_retry_gpu_clears_what_was_remembered(monkeypatch):
     controller._kokoro, controller._kokoro_key = object(), ("a",)
     controller.retry_gpu()
     assert cleared and controller._kokoro is None
+
+
+def test_live_voice_changer_gets_its_own_model(monkeypatch):
+    controller = Controller(Settings(rvc_model_path="v.onnx"), save=lambda s: None)
+    built = []
+
+    def build(key):
+        built.append(key)
+        return type("Model", (), {"index_rate": 0, "protect": 0})()
+
+    monkeypatch.setattr(controller, "_build_rvc", build)
+    tts = controller.rvc()
+    assert controller.rvc() is tts and len(built) == 1  # text to speech reuses its model
+    live = controller.live_rvc()
+    assert live is not tts and len(built) == 2  # a GPU session is only fast for one input size
+    assert controller.live_rvc() is not live  # every start gets a fresh one
