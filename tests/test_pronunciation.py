@@ -113,6 +113,8 @@ def test_dialog_edits_entries_and_listens(app):
     dialog.table.selectRow(0)
     dialog._remove_selected()
     assert [e.word for e in dialog.entries()] == ["Nvidia"]
+    dialog.deleteLater()
+    app.processEvents()
 
 
 def test_window_saves_the_dictionary(monkeypatch, app):
@@ -131,4 +133,7 @@ def test_window_saves_the_dictionary(monkeypatch, app):
     assert pronunciation.load() == [Entry("Zoom", "zúm", False)]
     assert window.settings.pron_builtin is False
     assert paths.config_dir() in pronunciation.dictionary_file().parents
+    window._quitting = True
+    window.close()
     window.deleteLater()
+    app.processEvents()
