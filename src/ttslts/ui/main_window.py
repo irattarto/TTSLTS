@@ -294,6 +294,25 @@ class MainWindow(QMainWindow):
         self.pitch_spin.setValue(s.pitch_shift)
         self.pitch_spin.valueChanged.connect(lambda v: self._set("pitch_shift", v))
         form.addRow("Pitch shift", self.pitch_spin)
+        self.index_spin = QDoubleSpinBox(minimum=0.0, maximum=1.0, singleStep=0.05)
+        self.index_spin.setValue(s.rvc_index_rate)
+        self.index_spin.valueChanged.connect(lambda v: self._set("rvc_index_rate", float(v)))
+        self.index_spin.setToolTip(
+            "How much the result leans on the real recordings of the voice (0 = not at all, "
+            "1 = fully). Higher sounds more like the real voice and clearer; too high can sound "
+            "rough or lose words. Needs a voice trained in TTSLTS (it has an index); applies to "
+            "the voice changer and to text to speech through the voice model."
+        )
+        form.addRow("Index rate", self.index_spin)
+        self.protect_spin = QDoubleSpinBox(minimum=0.0, maximum=0.5, singleStep=0.01)
+        self.protect_spin.setValue(s.rvc_protect)
+        self.protect_spin.valueChanged.connect(lambda v: self._set("rvc_protect", float(v)))
+        self.protect_spin.setToolTip(
+            "Protects consonants and breath sounds (s, sh, f, h...) from being smeared by the "
+            "index. Lower protects more (0 = most), 0.5 = off. Only matters when Index rate is "
+            "above 0."
+        )
+        form.addRow("Protect consonants", self.protect_spin)
         self.speaker_spin = QSpinBox(minimum=0, maximum=255)
         self.speaker_spin.setValue(s.speaker_id)
         self.speaker_spin.valueChanged.connect(lambda v: self._set("speaker_id", v))

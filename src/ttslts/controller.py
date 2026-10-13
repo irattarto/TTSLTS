@@ -121,8 +121,31 @@ class Controller(QObject):
 
                 self.status.emit("Loading voice model…")
                 self._rvc = load_rvc(*key)
+                self._rvc.index = self._load_index(s.rvc_model_path)
                 self._rvc_key = key
+            # these two can be changed while the model stays loaded
+            self._rvc.index_rate = s.rvc_index_rate
+            self._rvc.protect = s.rvc_protect
             return self._rvc
+
+    @staticmethod
+    def _load_index(model_path: str):
+        """The voice's retrieval index, made now from its training features if only those exist."""
+        from ttslts.vc import retrieval
+
+        path = retrieval.index_path(model_path)
+        try:
+            if not path.exists():
+                voice = Path(model_path)
+                features = paths.train_dir() / voice.stem / "feats"
+                in_voices = voice.parent.parent == paths.voices_dir()
+                if not (in_voices and features.is_dir()):
+                    return None  # a voice from elsewhere has no index
+                retrieval.build(features, path)
+            return retrieval.RetrievalIndex.load(path)
+        except (OSError, ValueError) as exc:
+            log.warning("Could not use the voice index %s: %s", path, exc)
+            return None
 
     def _background(self, fn: Callable[[], None], name: str) -> None:
         def run():

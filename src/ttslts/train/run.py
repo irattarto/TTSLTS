@@ -70,6 +70,12 @@ def run_job(job: dict) -> None:
             lambda f: emit(type="progress", stage="features", fraction=f),
         )
 
+    from ttslts.vc import retrieval
+
+    index_file = retrieval.index_path(out / f"{name}.onnx")
+    if not resume or not index_file.exists():
+        emit(type="stage", stage="features", text="Building the voice index…")
+        retrieval.build(work / "feats", index_file)
     voice_info.write(out, name, work)  # the voice's natural pitch, for matching text to speech
     emit(type="stage", stage="train", text="Training…")
     stop_file = work / STOP_FILE
