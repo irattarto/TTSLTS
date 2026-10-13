@@ -416,7 +416,11 @@ class Controller(QObject):
 
     # -- text to speech --------------------------------------------------
     def render_tts(self, text: str) -> tuple[np.ndarray, int]:
+        from ttslts.tts import pronunciation
+
         s = self.settings
+        language = "hu" if s.tts_engine == "piper" else s.tts_lang
+        text = pronunciation.apply_for(text, language, s.pron_builtin)
         if s.tts_engine == "piper":
             audio, sr = self.piper().synthesize(
                 text, s.tts_speed, noise_scale=s.piper_variation, noise_w=s.piper_rhythm

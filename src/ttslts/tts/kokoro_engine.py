@@ -47,5 +47,9 @@ class KokoroEngine:
         text = text.strip()
         if not text:
             return np.zeros(0, dtype=np.float32), 24000
+        if lang == "hu":
+            from ttslts.tts.hu_text import normalize_hungarian
+
+            text = normalize_hungarian(text)
         audio, sr = self._kokoro.create(text, voice=voice, speed=speed, lang=lang)
         return np.asarray(audio, dtype=np.float32), int(sr)
