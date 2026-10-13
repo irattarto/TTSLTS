@@ -14,7 +14,7 @@ from pathlib import Path
 import numpy as np
 from PySide6.QtCore import QObject, Signal
 
-from ttslts import paths
+from ttslts import onnx_util, paths
 from ttslts.audio import devices
 from ttslts.audio.dsp import resample
 from ttslts.audio.wav import write_wav
@@ -56,6 +56,7 @@ class Controller(QObject):
         self._piper_key = None
         self._vc = None
         self._train_proc: subprocess.Popen | None = None
+        onnx_util.set_fallback_notifier(self.status.emit)
         self._train_work: Path | None = None
 
     # -- settings --------------------------------------------------------
@@ -66,9 +67,17 @@ class Controller(QObject):
             self.error.emit(f"Could not save settings: {exc}")
 
     # -- models ----------------------------------------------------------
+    def gpu_allowed(self) -> bool:
+        """Whether the app's own models may use the GPU right now.
+
+        Training keeps the graphics card busy (and nearly all its memory), so while it runs the
+        speech and voice models stay on the CPU; they move back to the GPU afterwards.
+        """
+        return self.settings.use_gpu and not self.training
+
     def kokoro(self):
         s = self.settings
-        key = (s.kokoro_model_path, s.kokoro_voices_path, s.use_gpu)
+        key = (s.kokoro_model_path, s.kokoro_voices_path, self.gpu_allowed())
         with self._lock:
             if self._kokoro is None or self._kokoro_key != key:
                 from ttslts.tts.kokoro_engine import KokoroEngine
@@ -80,7 +89,7 @@ class Controller(QObject):
 
     def piper(self):
         s = self.settings
-        key = (s.piper_voice, s.use_gpu)
+        key = (s.piper_voice, self.gpu_allowed())
         with self._lock:
             if self._piper is None or self._piper_key != key:
                 from ttslts.tts import piper_download
@@ -93,13 +102,19 @@ class Controller(QObject):
                     )
                 model, config = piper_download.voice_paths(s.piper_voice)
                 self.status.emit("Loading Hungarian voice…")
-                self._piper = PiperVoice.load(str(model), str(config), s.use_gpu)
+                self._piper = PiperVoice.load(str(model), str(config), key[1])
                 self._piper_key = key
             return self._piper
 
     def rvc(self):
         s = self.settings
-        key = (s.rvc_model_path, s.contentvec_path, s.rmvpe_path, s.use_gpu, s.rvc_sample_rate)
+        key = (
+            s.rvc_model_path,
+            s.contentvec_path,
+            s.rmvpe_path,
+            self.gpu_allowed(),
+            s.rvc_sample_rate,
+        )
         with self._lock:
             if self._rvc is None or self._rvc_key != key:
                 from ttslts.vc.rvc import load_rvc
@@ -276,10 +291,20 @@ class Controller(QObject):
             self.error.emit(f"Could not start training: {exc}")
             return
         self._train_proc, self._train_work = proc, work
+        self._release_gpu_models()
         self.trainRunning.emit(True)
         threading.Thread(
             target=self._read_training, args=(proc, log_file, work), daemon=True, name="train"
         ).start()
+
+    def _release_gpu_models(self) -> None:
+        """Free the graphics card for training: stop the voice changer, drop loaded models."""
+        if self.vc_running:
+            self.stop_vc()
+            self.status.emit("Voice changer stopped: the graphics card is needed for training")
+        with self._lock:
+            self._kokoro = self._piper = self._rvc = None
+            self._kokoro_key = self._piper_key = self._rvc_key = None
 
     def _read_training(self, proc: subprocess.Popen, log_file, work: Path) -> None:
         last_error = ""

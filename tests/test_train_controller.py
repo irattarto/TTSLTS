@@ -75,3 +75,21 @@ def test_runner_events_reach_the_ui(tmp_path, monkeypatch):
     ]
     job = json.loads((tmp_path / "home" / "train" / "voice" / "job.json").read_text())
     assert job["sample_rate"] == 40000 and job["files"] == ["a.wav"]
+
+
+def test_models_stay_off_the_gpu_while_training(monkeypatch):
+    controller = Controller(Settings(use_gpu=True), save=lambda s: None)
+    assert controller.gpu_allowed()
+    controller._train_proc = type("P", (), {"poll": lambda self: None})()
+    assert not controller.gpu_allowed()  # training is running
+    controller.settings.use_gpu = False
+    controller._train_proc = None
+    assert not controller.gpu_allowed()  # the user switched the GPU off
+
+
+def test_training_start_frees_loaded_models():
+    controller = Controller(Settings(), save=lambda s: None)
+    controller._kokoro, controller._kokoro_key = object(), ("a", "b", True)
+    controller._rvc, controller._rvc_key = object(), ("c",)
+    controller._release_gpu_models()
+    assert controller._kokoro is None and controller._rvc is None and controller._rvc_key is None
