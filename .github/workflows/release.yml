@@ -31,6 +31,10 @@ jobs:
         with:
           python-version: "3.12"
       - run: pip install -e . pyinstaller
+      - name: Use the DirectML build of ONNX Runtime (GPU on NVIDIA, AMD and Intel)
+        run: |
+          pip uninstall -y onnxruntime
+          pip install --force-reinstall --no-deps onnxruntime-directml
       - name: Render icons
         run: python packaging/make_icons.py icons
         env:

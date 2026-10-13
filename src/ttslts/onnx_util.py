@@ -23,6 +23,13 @@ def make_session(path: str, use_gpu: bool):
 
     opts = ort.SessionOptions()
     opts.log_severity_level = 3
-    session = ort.InferenceSession(path, sess_options=opts, providers=providers(use_gpu))
+    chosen = providers(use_gpu)
+    try:
+        session = ort.InferenceSession(path, sess_options=opts, providers=chosen)
+    except Exception as exc:  # no usable GPU / driver: run on the CPU instead of failing
+        if chosen == ["CPUExecutionProvider"]:
+            raise
+        log.warning("GPU provider failed for %s (%s); using the CPU", path, exc)
+        session = ort.InferenceSession(path, sess_options=opts, providers=["CPUExecutionProvider"])
     log.info("Loaded %s with %s", path, session.get_providers())
     return session

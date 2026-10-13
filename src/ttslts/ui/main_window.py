@@ -551,7 +551,14 @@ class MainWindow(QMainWindow):
             self.latency_label.setText("")
 
     def _on_latency(self, ms: float) -> None:
-        self.latency_label.setText(f"Processing: {ms:.0f} ms per chunk")
+        text = f"Processing: {ms:.0f} ms per chunk"
+        if ms > self.settings.chunk_ms:
+            text += (
+                f" - too slow for a {self.settings.chunk_ms} ms chunk, the voice will break up. "
+                "Raise the chunk size in Settings or use a GPU."
+            )
+        self.latency_label.setText(text)
+        self.latency_label.setWordWrap(True)
 
     # -- TTS engine ------------------------------------------------------
     def _on_engine_changed(self, _index: int) -> None:
