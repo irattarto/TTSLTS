@@ -127,3 +127,25 @@ def estimate_f0(
             tau = tau + float(np.clip(shift, -1, 1))
         f0[i] = sr / tau
     return f0
+
+
+def split_at_quiet(x: np.ndarray, sr: int, target_s: float = 6.0, search_s: float = 1.5) -> list:
+    """Cut ``x`` into pieces of about ``target_s`` seconds, each cut at the quietest moment
+    within ``search_s`` seconds before the target, so no word is split."""
+    x = np.asarray(x, dtype=np.float32)
+    target, search, frame = int(target_s * sr), int(search_s * sr), max(1, int(0.02 * sr))
+    pieces, start = [], 0
+    while len(x) - start > target + search // 2:
+        lo, hi = start + target - search, start + target + search // 2
+        seg = x[lo:hi]
+        n = len(seg) // frame
+        level = np.sqrt((seg[: n * frame].reshape(n, frame) ** 2).mean(axis=1))
+        quiet = level <= level.min() * 1.2 + 1e-5
+        edges = np.flatnonzero(np.diff(np.concatenate([[0], quiet.astype(np.int8), [0]])))
+        runs = list(zip(edges[::2], edges[1::2], strict=True))  # [first, end) of each quiet stretch
+        first, end = max(runs, key=lambda r: r[1] - r[0])
+        cut = lo + ((first + end) // 2) * frame  # the middle of the longest pause
+        pieces.append(x[start:cut])
+        start = cut
+    pieces.append(x[start:])
+    return pieces

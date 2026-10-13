@@ -16,14 +16,17 @@ from PySide6.QtCore import QObject, Signal
 
 from ttslts import onnx_util, paths
 from ttslts.audio import devices
-from ttslts.audio.dsp import resample
+from ttslts.audio.dsp import resample, split_at_quiet
 from ttslts.audio.wav import write_wav
 from ttslts.gpu_memory import GpuMemoryGate
 from ttslts.settings import Settings
 
 log = logging.getLogger(__name__)
 
-RVC_TTS_CHUNK_S = 15  # convert long TTS output in pieces to bound memory use
+# Convert long TTS output in pieces: the video memory a voice model holds grows with the length
+# of the longest piece it has converted (0.8 GB loaded, 1.8 GB after 6 s, 3.9 GB after 15 s).
+RVC_TTS_PIECE_S = 6.0
+RVC_IDLE_RELEASE_S = 60.0  # the text-to-speech voice model leaves the GPU after this long unused
 
 
 class Controller(QObject):
@@ -57,6 +60,7 @@ class Controller(QObject):
         self._piper_key = None
         self._vc = None
         self._train_proc: subprocess.Popen | None = None
+        self._rvc_timer: threading.Timer | None = None
         self._gpu_memory = GpuMemoryGate()
         onnx_util.set_fallback_notifier(self.status.emit)
         self._train_work: Path | None = None
@@ -109,15 +113,12 @@ class Controller(QObject):
                 self._piper_key = key
             return self._piper
 
-    def _rvc_key(self) -> tuple:
+    def _rvc_key(self, live: bool = False) -> tuple:
         s = self.settings
-        return (
-            s.rvc_model_path,
-            s.contentvec_path,
-            s.rmvpe_path,
-            self.gpu_allowed(),
-            s.rvc_sample_rate,
-        )
+        # While the live voice changer runs, text to speech converts on the CPU so it cannot
+        # take the video memory the live model needs.
+        gpu = self.gpu_allowed() and (live or not self.vc_running)
+        return (s.rvc_model_path, s.contentvec_path, s.rmvpe_path, gpu, s.rvc_sample_rate)
 
     def _build_rvc(self, key: tuple):
         from ttslts.vc.rvc import load_rvc
@@ -151,7 +152,7 @@ class Controller(QObject):
         fresh model and stays fast (measured: 68 ms instead of 603 ms per chunk).
         """
         self.status.emit("Loading voice model for the voice changer…")
-        return self._build_rvc(self._rvc_key())
+        return self._build_rvc(self._rvc_key(live=True))
 
     @staticmethod
     def _load_index(model_path: str):
@@ -351,6 +352,19 @@ class Controller(QObject):
         self._release_gpu_models()
         self.status.emit("The graphics card will be tried again for every model")
 
+    def _release_tts_rvc(self) -> None:
+        """Drop the text-to-speech voice model, which frees the video memory it holds."""
+        with self._lock:
+            self._rvc, self._rvc_key_loaded = None, None
+
+    def _rvc_idle_timer(self) -> None:
+        """(Re)start the countdown after which the unused text-to-speech voice model is dropped."""
+        if self._rvc_timer is not None:
+            self._rvc_timer.cancel()
+        self._rvc_timer = threading.Timer(RVC_IDLE_RELEASE_S, self._release_tts_rvc)
+        self._rvc_timer.daemon = True
+        self._rvc_timer.start()
+
     def _release_gpu_models(self) -> None:
         """Free the graphics card for training: stop the voice changer, drop loaded models."""
         if self.vc_running:
@@ -432,12 +446,12 @@ class Controller(QObject):
             self.status.emit("Applying voice model…")
             src = resample(audio, sr, 16000)
             shift = s.pitch_shift + (self._auto_pitch_shift(model, src) if s.tts_auto_pitch else 0)
-            step = 16000 * RVC_TTS_CHUNK_S
             parts = [
-                model.convert(src[i : i + step], shift, s.speaker_id)
-                for i in range(0, len(src), step)
+                model.convert(piece, shift, s.speaker_id)
+                for piece in split_at_quiet(src, 16000, RVC_TTS_PIECE_S)
             ]
             audio, sr = np.concatenate(parts), model.sample_rate
+            self._rvc_idle_timer()
         return audio, sr
 
     def _auto_pitch_shift(self, model, src16k: np.ndarray) -> float:
@@ -506,6 +520,7 @@ class Controller(QObject):
             from ttslts.vc.realtime import RealtimeVoiceChanger
 
             s = self.settings
+            self._release_tts_rvc()  # its video memory is needed by the live model
             model = self.live_rvc()
             if model.session.get_providers()[0] == "CPUExecutionProvider":
                 self.status.emit(
@@ -550,6 +565,8 @@ class Controller(QObject):
             self.start_vc()
 
     def shutdown(self) -> None:
+        if self._rvc_timer is not None:
+            self._rvc_timer.cancel()
         proc = self._train_proc
         if proc is not None and proc.poll() is None:
             proc.terminate()  # the last periodic checkpoint is kept for resuming
