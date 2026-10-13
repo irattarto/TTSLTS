@@ -6,7 +6,7 @@ import os
 import re
 from pathlib import Path
 
-from PySide6.QtCore import QEvent, Qt, QTimer, QUrl
+from PySide6.QtCore import QEvent, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QCloseEvent, QDesktopServices
 from PySide6.QtWidgets import (
     QApplication,
@@ -83,6 +83,10 @@ TIPS = {
     "speak_btn": "Read the text aloud now.",
     "stop_btn": "Stop the speech that is playing.",
     "save_btn": "Save the speech as a WAV file instead of playing it.",
+    "pron_btn": (
+        "Words the voice says wrongly: write them the way they sound and the voice uses that "
+        "instead. You can also select a word in the text and right-click it."
+    ),
     "input_combo": "The microphone whose voice is changed.",
     "output_combo": (
         "Where the changed voice goes. A virtual cable (for example VB-Audio CABLE Input) lets "
@@ -141,6 +145,21 @@ TIPS = {
 }
 
 
+class SpeechTextEdit(QPlainTextEdit):
+    """The text box; its context menu can open the pronunciation editor for the selected word."""
+
+    fixPronunciation = Signal(str)
+
+    def contextMenuEvent(self, event) -> None:
+        menu = self.createStandardContextMenu()
+        word = self.textCursor().selectedText().strip()
+        if word and len(word) <= 40 and " " not in word:
+            menu.addSeparator()
+            action = menu.addAction(f"Fix the pronunciation of “{word}”…")
+            action.triggered.connect(lambda: self.fixPronunciation.emit(word))
+        menu.exec(event.globalPos())
+
+
 class MainWindow(QMainWindow):
     def __init__(self, controller: Controller, tray_available: bool = True):
         super().__init__()
@@ -191,7 +210,8 @@ class MainWindow(QMainWindow):
         s = self.settings
         w = QWidget()
         layout = QVBoxLayout(w)
-        self.text_edit = QPlainTextEdit()
+        self.text_edit = SpeechTextEdit()
+        self.text_edit.fixPronunciation.connect(self._edit_pronunciations)
         self.text_edit.setPlaceholderText("Type text to speak…")
         layout.addWidget(self.text_edit, 1)
 
@@ -273,7 +293,9 @@ class MainWindow(QMainWindow):
         self.stop_btn.clicked.connect(self.controller.stop_speaking)
         self.save_btn = QPushButton("Save WAV…")
         self.save_btn.clicked.connect(self._save_wav)
-        for b in (self.speak_btn, self.stop_btn, self.save_btn):
+        self.pron_btn = QPushButton("Pronunciations…")
+        self.pron_btn.clicked.connect(lambda: self._edit_pronunciations())
+        for b in (self.speak_btn, self.stop_btn, self.save_btn, self.pron_btn):
             buttons.addWidget(b)
         layout.addLayout(buttons)
         self._refresh_piper_voices()
@@ -722,6 +744,26 @@ class MainWindow(QMainWindow):
             )
         self.latency_label.setText(text)
         self.latency_label.setWordWrap(True)
+
+    # -- pronunciations -----------------------------------------------------
+    def _edit_pronunciations(self, word: str = "") -> None:
+        from ttslts.tts import pronunciation
+        from ttslts.ui.pronunciation_dialog import PronunciationDialog
+
+        dialog = PronunciationDialog(
+            self,
+            pronunciation.load(),
+            self.settings.pron_builtin,
+            listen=self.controller.speak,
+            word=word,
+        )
+        if dialog.exec():
+            try:
+                pronunciation.save(dialog.entries())
+            except OSError as exc:
+                self._show_error(f"Could not save the pronunciations: {exc}")
+                return
+            self._set("pron_builtin", dialog.use_builtin())
 
     # -- TTS engine ------------------------------------------------------
     def _on_engine_changed(self, _index: int) -> None:
