@@ -529,6 +529,14 @@ class MainWindow(QMainWindow):
             "it is too slow. Applies the next time a model is loaded."
         )
         pl.addRow("", gpu)
+        retry = QPushButton("Try the GPU again for every model")
+        retry.setToolTip(
+            "If a model could not run on the graphics card, the app remembers that and uses the "
+            "CPU for it. This forgets it, so every model is tried on the GPU again (for example "
+            "after a driver update)."
+        )
+        retry.clicked.connect(self.controller.retry_gpu)
+        pl.addRow("", retry)
         for label, key, lo, hi, suffix in (
             ("Chunk size", "chunk_ms", 50, 1000, " ms"),
             ("Context", "context_ms", 0, 3000, " ms"),

@@ -320,6 +320,12 @@ class Controller(QObject):
             target=self._read_training, args=(proc, log_file, work), daemon=True, name="train"
         ).start()
 
+    def retry_gpu(self) -> None:
+        """Forget which models failed on the GPU and reload everything, so all try it again."""
+        onnx_util.clear_gpu_failures()
+        self._release_gpu_models()
+        self.status.emit("The graphics card will be tried again for every model")
+
     def _release_gpu_models(self) -> None:
         """Free the graphics card for training: stop the voice changer, drop loaded models."""
         if self.vc_running:

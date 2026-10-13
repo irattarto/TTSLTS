@@ -35,17 +35,25 @@ def test_cpu_only_errors_are_not_hidden(monkeypatch):
         onnx_util.make_session("model.onnx", True)
 
 
-class FlakySession:
-    """Stands in for a GPU session whose runs fail."""
+class GpuSession:
+    """Stands in for a GPU session; ``error`` is what its runs fail with (None: they work)."""
+
+    def __init__(self, error=None):
+        self.error = error
+        self.runs = 0
 
     def run(self, outputs, feed):
-        raise RuntimeError("80070057 The parameter is incorrect")
+        self.runs += 1
+        if self.error:
+            raise RuntimeError(self.error)
+        return ["gpu result"]
 
     def get_providers(self):
         return ["DmlExecutionProvider", "CPUExecutionProvider"]
 
 
-def test_failed_gpu_run_is_repeated_on_the_cpu(monkeypatch):
+@pytest.fixture
+def cpu_sessions(monkeypatch):
     class CpuSession:
         def __init__(self, path, sess_options=None, providers=None):
             assert providers == ["CPUExecutionProvider"]
@@ -53,52 +61,71 @@ def test_failed_gpu_run_is_repeated_on_the_cpu(monkeypatch):
         def run(self, outputs, feed):
             return ["cpu result"]
 
+    monkeypatch.setattr(ort, "InferenceSession", CpuSession)
     messages = []
     onnx_util.set_fallback_notifier(messages.append)
-    monkeypatch.setattr(ort, "InferenceSession", CpuSession)
-    session = onnx_util.ResilientSession("model.onnx", None, FlakySession())
-    try:
-        assert session.run(None, {}) == ["cpu result"]
-        assert session.on_cpu and len(messages) == 1
-        assert session.run(None, {}) == ["cpu result"]  # stays on the CPU, no second warning
-        assert len(messages) == 1
-    finally:
-        onnx_util.set_fallback_notifier(None)
+    yield messages
+    onnx_util.set_fallback_notifier(None)
 
 
-def test_errors_on_the_cpu_are_not_hidden():
-    class Broken:
-        def run(self, outputs, feed):
-            raise RuntimeError("bad input")
-
-    session = onnx_util.ResilientSession("model.onnx", None, Broken())
-    session.on_cpu = True
-    with pytest.raises(RuntimeError, match="bad input"):
-        session.run(None, {})
+def test_error_classes():
+    assert onnx_util.is_transient(RuntimeError("E_OUTOFMEMORY 8007000E"))
+    assert onnx_util.is_transient(RuntimeError("DXGI_ERROR_DEVICE_REMOVED 887A0005"))
+    assert not onnx_util.is_transient(RuntimeError("80070057 The parameter is incorrect"))
 
 
-def test_a_model_that_failed_on_the_gpu_goes_straight_to_the_cpu_next_time(monkeypatch):
-    class Session:
-        def __init__(self, path, sess_options=None, providers=None):
-            self.chosen = providers
+def test_a_busy_gpu_is_only_avoided_for_a_moment_and_never_given_up_on(cpu_sessions):
+    gpu = GpuSession("out of memory")
+    session = onnx_util.ResilientSession("model.onnx", None, gpu)
+    assert session.run(None, {}) == ["cpu result"] and session.on_cpu
+    assert session.run(None, {}) == ["cpu result"] and gpu.runs == 1  # not retried during backoff
+    assert len(cpu_sessions) == 1 and "busy" in cpu_sessions[0]
+    gpu.error = None
+    session._cpu_until = 0.0  # the backoff is over
+    assert session.run(None, {}) == ["gpu result"] and not session.on_cpu  # back on the GPU
+    assert onnx_util._skip_list() == []  # nothing remembered for next time
 
-        def run(self, outputs, feed):
-            if self.chosen[0] != "CPUExecutionProvider":
-                raise RuntimeError("unsupported on this GPU")
-            return ["ok"]
 
-        def get_providers(self):
-            return self.chosen
+def test_the_same_unsupported_failure_twice_sends_a_model_to_the_cpu_for_good(
+    cpu_sessions, monkeypatch
+):
+    session = onnx_util.ResilientSession("kokoro.onnx", None, GpuSession("80070057"))
+    session.run(None, {})
+    assert onnx_util._skip_list() == []  # once could have been bad luck
+    session._cpu_until = 0.0
+    session.run(None, {})
+    assert onnx_util._skip_list() == ["kokoro.onnx"]
 
-    monkeypatch.setattr(ort, "InferenceSession", Session)
     monkeypatch.setattr(
         onnx_util,
         "providers",
         lambda use_gpu: (["DmlExecutionProvider"] if use_gpu else []) + ["CPUExecutionProvider"],
     )
-    first = onnx_util.make_session("kokoro.onnx", True)
-    assert first.run(None, {}) == ["ok"] and first.on_cpu  # fell back during the first run
-    second = onnx_util.make_session("kokoro.onnx", True)
-    assert second.get_providers() == ["CPUExecutionProvider"]  # remembered
-    other = onnx_util.make_session("other.onnx", True)
-    assert other.get_providers()[0] == "DmlExecutionProvider"  # other models still try the GPU
+
+    class Loaded:
+        def __init__(self, path, sess_options=None, providers=None):
+            self.chosen = providers
+
+        def get_providers(self):
+            return self.chosen
+
+    monkeypatch.setattr(ort, "InferenceSession", Loaded)
+    assert onnx_util.make_session("kokoro.onnx", True).get_providers() == ["CPUExecutionProvider"]
+    assert onnx_util.make_session("other.onnx", True).get_providers()[0] == "DmlExecutionProvider"
+
+    onnx_util.clear_gpu_failures()  # "Try the GPU again for every model"
+    assert onnx_util.make_session("kokoro.onnx", True).get_providers()[0] == "DmlExecutionProvider"
+
+
+def test_errors_on_the_cpu_are_not_hidden(monkeypatch):
+    class Broken:
+        def __init__(self, path, sess_options=None, providers=None):
+            pass
+
+        def run(self, outputs, feed):
+            raise RuntimeError("bad input")
+
+    monkeypatch.setattr(ort, "InferenceSession", Broken)
+    session = onnx_util.ResilientSession("model.onnx", None, GpuSession("out of memory"))
+    with pytest.raises(RuntimeError, match="bad input"):
+        session.run(None, {})
