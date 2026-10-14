@@ -49,11 +49,33 @@ class GpuMemoryGate:
         self,
         read: Callable[[], int | None] = read_free_mb,
         clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
     ):
         self._read = read
         self._clock = clock
+        self._sleep = sleep
         self._ok = True
         self._checked = float("-inf")
+
+    def room_for(
+        self, need_mb: int, tries: int = 6, wait_s: float = 0.5
+    ) -> tuple[bool, int | None]:
+        """Whether ``need_mb`` is free right now, read fresh (not the last answer).
+
+        Meant for right after the app freed models of its own: the card can take a moment to
+        report that memory as free, so it is read a few times. Returns (room, free MB).
+        """
+        free = None
+        for attempt in range(tries):
+            free = self._read()
+            if free is None or free >= need_mb:
+                break
+            if attempt + 1 < tries:
+                self._sleep(wait_s)
+        room = free is None or free >= need_mb
+        if room:  # the card is fine again: models may use it from now on
+            self._ok, self._checked = True, self._clock()
+        return room, free
 
     def allowed(self) -> bool:
         """True if models may be on the GPU. Unknown free memory counts as allowed."""

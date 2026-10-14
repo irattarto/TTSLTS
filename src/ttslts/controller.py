@@ -27,6 +27,7 @@ log = logging.getLogger(__name__)
 # of the longest piece it has converted (0.8 GB loaded, 1.8 GB after 6 s, 3.9 GB after 15 s).
 RVC_TTS_PIECE_S = 6.0
 RVC_IDLE_RELEASE_S = 60.0  # the text-to-speech voice model leaves the GPU after this long unused
+LIVE_GPU_NEED_MB = 1024  # free video memory the live voice changer needs (0.8 GB measured + room)
 RVC_TTS_PAD_S = 0.3  # mirrored speech around each piece, so its edges are converted with context
 
 
@@ -128,11 +129,12 @@ class Controller(QObject):
                 self._piper_key = key
             return self._piper
 
-    def _rvc_key(self, live: bool = False) -> tuple:
+    def _rvc_key(self, live: bool = False, gpu: bool | None = None) -> tuple:
         s = self.settings
         # While the live voice changer runs, text to speech converts on the CPU so it cannot
         # take the video memory the live model needs.
-        gpu = self.gpu_allowed() and (live or not self.vc_running)
+        if gpu is None:
+            gpu = self.gpu_allowed() and (live or not self.vc_running)
         return (s.rvc_model_path, s.contentvec_path, s.rmvpe_path, gpu, s.rvc_sample_rate)
 
     def _build_rvc(self, key: tuple, live: bool = False):
@@ -159,7 +161,7 @@ class Controller(QObject):
             self._rvc.protect = s.rvc_protect
             return self._rvc
 
-    def live_rvc(self):
+    def live_rvc(self, gpu: bool | None = None):
         """A voice model of its own for the real-time voice changer.
 
         A GPU session (DirectML) is only fast for the first input size it sees; every other size
@@ -168,7 +170,7 @@ class Controller(QObject):
         fresh model and stays fast (measured: 68 ms instead of 603 ms per chunk).
         """
         self.status.emit("Loading voice model for the voice changer…")
-        return self._build_rvc(self._rvc_key(live=True), live=True)
+        return self._build_rvc(self._rvc_key(live=True, gpu=gpu), live=True)
 
     @staticmethod
     def _load_index(model_path: str, use_gpu: bool = False):
@@ -365,6 +367,33 @@ class Controller(QObject):
         with self._lock:
             self._rvc, self._rvc_key_loaded = None, None
 
+    def _release_tts_models(self) -> None:
+        """Drop both text-to-speech models (voice model and Piper) and their video memory."""
+        with self._lock:
+            self._rvc, self._rvc_key_loaded = None, None
+            self._piper, self._piper_key = None, None
+
+    def _live_gpu(self) -> bool:
+        """Whether the voice changer about to start may use the GPU.
+
+        Asked right after the text-to-speech models were freed, with a fresh reading: the
+        memory check remembers the last few seconds, when those models still filled the card,
+        and on its own sent the voice changer to the CPU after speech until the app restarted.
+        """
+        if not self.settings.use_gpu:
+            self.status.emit("The GPU is switched off in Settings: the voice changer uses the CPU")
+            return False
+        if self.training:
+            return False
+        room, free = self._gpu_memory.room_for(LIVE_GPU_NEED_MB)
+        if not room:
+            self.status.emit(
+                f"The graphics card's memory is full ({free} MB free, {LIVE_GPU_NEED_MB} MB "
+                "needed): the voice changer runs on the CPU, which is too slow for real time. "
+                "Close programs that use the graphics card and start it again."
+            )
+        return room
+
     def _rvc_idle_timer(self) -> None:
         """(Re)start the countdown after which the unused text-to-speech voice model is dropped."""
         if self._rvc_timer is not None:
@@ -549,12 +578,13 @@ class Controller(QObject):
             from ttslts.vc.realtime import RealtimeVoiceChanger
 
             s = self.settings
-            self._release_tts_rvc()  # its video memory is needed by the live model
-            model = self.live_rvc()
-            if model.session.get_providers()[0] == "CPUExecutionProvider":
+            self._release_tts_models()  # their video memory is needed by the live model
+            gpu = self._live_gpu()
+            model = self.live_rvc(gpu)
+            if gpu and model.session.get_providers()[0] == "CPUExecutionProvider":
                 self.status.emit(
                     "Voice changer is running on the CPU, which is usually too slow for "
-                    "real time (needs a GPU build of ONNX Runtime)"
+                    "real time (the graphics card could not be used for this model)"
                 )
             vc = RealtimeVoiceChanger(
                 model,
