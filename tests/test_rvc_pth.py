@@ -2,7 +2,7 @@ import numpy as np
 import onnxruntime as ort
 import pytest
 from fakes import fake_contentvec
-from rvc_fixture import TINY_CONFIG, feed, random_voice
+from rvc_fixture import TINY_CONFIG, feed, for_session, random_voice
 from torch_fixture import write_checkpoint
 
 from ttslts.vc import rvc_pth
@@ -40,9 +40,35 @@ def test_works_for_short_and_long_inputs():
 def test_noise_free_build_is_deterministic():
     state, cfg = rvc_pth.validate(random_voice())
     session = _session(rvc_pth.build_model(state, cfg, noise=False))
-    a = session.run(None, feed())[0]
-    b = session.run(None, feed())[0]
+    assert "nsf_noise" not in [i.name for i in session.get_inputs()]
+    a = session.run(None, for_session(session, feed()))[0]
+    b = session.run(None, for_session(session, feed()))[0]
     assert np.array_equal(a, b)
+
+
+def test_noise_comes_from_the_input():
+    """Same noise in, same audio out: overlapping windows of a stream can then agree."""
+    state, cfg = rvc_pth.validate(random_voice())
+    session = _session(rvc_pth.build_model(state, cfg))
+    a = session.run(None, feed())[0]
+    assert np.array_equal(a, session.run(None, feed())[0])
+    other = {**feed(), "nsf_noise": feed(seed=7)["nsf_noise"]}
+    assert not np.allclose(a, session.run(None, other)[0])
+
+
+def test_skip_uses_the_noise_of_the_decoded_frames():
+    state, cfg = rvc_pth.validate(random_voice())
+    session = _session(rvc_pth.build_model(state, cfg))
+    inputs = {**feed(), "skip": np.array([4], dtype=np.int64)}
+    base = session.run(None, inputs)[0]
+
+    def changed(frame):
+        noise = inputs["nsf_noise"].copy()
+        noise[..., frame] += 1.0
+        return session.run(None, {**inputs, "nsf_noise": noise})[0]
+
+    assert np.array_equal(changed(2), base)  # a frame that is not decoded
+    assert not np.array_equal(changed(6), base)
 
 
 def test_second_resblock_type_builds():
@@ -115,9 +141,10 @@ def test_skip_decodes_only_the_newest_frames():
     state, cfg = rvc_pth.validate(random_voice())
     session = _session(rvc_pth.build_model(state, cfg, noise=False))
     assert "skip" in [i.name for i in session.get_inputs()]
-    full = session.run(None, feed())[0]  # skip = 0 decodes everything
+    inputs = for_session(session, feed())
+    full = session.run(None, inputs)[0]  # skip = 0 decodes everything
     assert full.shape[-1] == 72
-    part = session.run(None, {**feed(), "skip": np.array([4], dtype=np.int64)})[0]
+    part = session.run(None, {**inputs, "skip": np.array([4], dtype=np.int64)})[0]
     assert part.shape[-1] == (9 - 4) * 8 and np.isfinite(part).all()
 
 

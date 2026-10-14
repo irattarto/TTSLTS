@@ -14,7 +14,7 @@ from pathlib import Path
 
 import numpy as np
 
-from ttslts.audio.dsp import f0_to_coarse, resample, to_mono
+from ttslts.audio.dsp import HIGHPASS_HZ, f0_to_coarse, resample, to_mono
 
 log = logging.getLogger(__name__)
 
@@ -24,7 +24,6 @@ OVERLAP_S = 0.3
 MIN_CLIP_S = 1.0
 SILENCE_DB = -45.0  # quieter than this counts as a pause
 MIN_PAUSE_S = 0.4
-HIGHPASS_HZ = 48.0
 HOP_16K = 160
 
 

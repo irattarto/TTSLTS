@@ -7,14 +7,16 @@ import queue
 import threading
 import time
 from collections.abc import Callable
+from math import gcd
 
 import numpy as np
 
-from ttslts.audio.dsp import crossfade, fit_length, resample, rms_db, to_mono
+from ttslts.audio.dsp import band_crossfade, fit_length, highpass_filter, resample, rms_db, to_mono
 
 log = logging.getLogger(__name__)
 
 SR_16K = 16000
+RESAMPLE_MARGIN_16K = 80  # 5 ms
 
 
 class StreamConverter:
@@ -27,23 +29,25 @@ class StreamConverter:
     crossfaded. That hides the joins that a plain crossfade leaves as a buzz. Output is delayed
     by the crossfade length (plus up to ``sola_ms``).
 
-    ``convert(window_16k, keep_16k)`` must return the newest ``keep_16k / 16000`` seconds of the
-    converted window (a model that cannot skip may return all of it).
+    ``convert(window_16k, keep_16k, position)`` must return the newest ``keep_16k / 16000``
+    seconds of the converted window (a model that cannot skip may return all of it).
+    ``position`` is where the window starts in the stream, in 16 kHz samples.
     """
 
     def __init__(
         self,
-        convert: Callable[[np.ndarray, int], np.ndarray],
+        convert: Callable[[np.ndarray, int, int], np.ndarray],
         model_sr: int,
         in_sr: int,
         out_sr: int,
         chunk_ms: int = 200,
-        context_ms: int = 600,
+        context_ms: int = 1500,
         crossfade_ms: int = 40,
         silence_db: float = -50.0,
-        sola_ms: int = 12,
+        sola_ms: int = 20,  # one period of a 50 Hz voice
     ):
         self.convert = convert
+        crossfade_ms = min(crossfade_ms, chunk_ms)  # a longer crossfade would not fit a chunk
         self.model_sr = model_sr
         self.in_sr = in_sr
         self.out_sr = out_sr
@@ -55,11 +59,19 @@ class StreamConverter:
         self.sola_16k = SR_16K * sola_ms // 1000
         self.sola_out = out_sr * sola_ms // 1000
         self.history_16k = SR_16K * context_ms // 1000 + self.xfade_16k + self.sola_16k
-        self.keep_16k = self.chunk_16k + self.xfade_16k + self.sola_16k
+        # a little more than is emitted, so the resampling filter's edge stays outside of it
+        self.keep_16k = self.chunk_16k + self.xfade_16k + self.sola_16k + RESAMPLE_MARGIN_16K
         self.need_out = self.chunk_out + self.xfade_out + self.sola_out
         self.silence_db = silence_db
-        self._history = np.zeros(self.history_16k, dtype=np.float32)
+        self.window_16k = self.history_16k + self.chunk_16k
+        # The microphone audio is kept at its own rate and the whole window is resampled at
+        # once: resampling every block on its own leaves a small glitch at each block edge.
+        down = in_sr // gcd(in_sr, SR_16K)
+        raw = -(-(self.window_16k * in_sr) // SR_16K) + RESAMPLE_MARGIN_16K * in_sr // SR_16K
+        self._raw = np.zeros(-(-raw // down) * down, dtype=np.float32)
+        self._highpass = highpass_filter(in_sr)
         self._tail = np.zeros(self.xfade_out, dtype=np.float32)
+        self._position = -self.window_16k  # stream position of the window's start (16 kHz)
 
     def _best_offset(self, segment: np.ndarray) -> int:
         """Start (0..sola_out) in ``segment`` whose waveform best continues the previous tail."""
@@ -75,16 +87,24 @@ class StreamConverter:
         # among equally good offsets prefer the latest, which is the least delayed
         return self.sola_out - int(np.argmax(score[::-1]))
 
+    def _window(self, block: np.ndarray) -> np.ndarray:
+        """Add a microphone block; returns the newest ``window_16k`` samples at 16 kHz."""
+        filtered = fit_length(self._highpass(block), self.chunk_in)
+        self._raw = np.concatenate([self._raw[len(filtered) :], filtered])
+        resampled = resample(self._raw, self.in_sr, SR_16K)
+        return np.ascontiguousarray(fit_length(resampled[::-1], self.window_16k)[::-1])
+
     def process(self, block: np.ndarray) -> np.ndarray:
         block = to_mono(block)
-        new16k = fit_length(resample(block, self.in_sr, SR_16K), self.chunk_16k)
-        window = np.concatenate([self._history, new16k])
-        self._history = window[-self.history_16k :] if self.history_16k else self._history
+        level = rms_db(block)
+        window = self._window(block)
+        self._position += self.chunk_16k
 
-        if rms_db(block) < self.silence_db:
+        if level < self.silence_db:
             segment = np.zeros(self.need_out, dtype=np.float32)
         else:
-            converted = resample(self.convert(window, self.keep_16k), self.model_sr, self.out_sr)
+            out = self.convert(window, self.keep_16k, self._position)
+            converted = resample(out, self.model_sr, self.out_sr)
             segment = converted[-self.need_out :]
             if len(segment) < self.need_out:  # short output: keep it at the end of the block
                 segment = np.pad(segment, (self.need_out - len(segment), 0))
@@ -92,8 +112,9 @@ class StreamConverter:
         start = self._best_offset(segment)
         piece = segment[start : start + self.chunk_out + self.xfade_out]
         emitted = piece[: self.chunk_out].copy()
-        n = min(self.xfade_out, self.chunk_out)
-        emitted[:n] = crossfade(self._tail[:n], emitted[:n])
+        emitted[: self.xfade_out] = band_crossfade(
+            self._tail, emitted[: self.xfade_out], self.out_sr
+        )
         self._tail = piece[self.chunk_out :].copy()
         return emitted
 
@@ -129,7 +150,7 @@ class RealtimeVoiceChanger:
         pitch_shift: Callable[[], float],
         speaker_id: int = 0,
         chunk_ms: int = 200,
-        context_ms: int = 600,
+        context_ms: int = 1500,
         crossfade_ms: int = 40,
         silence_db: float = -50.0,
         on_stats: Callable[[float], None] | None = None,
@@ -161,7 +182,9 @@ class RealtimeVoiceChanger:
         in_sr = int(sd.query_devices(self.input_device, "input")["default_samplerate"])
         out_sr = int(sd.query_devices(self.output_device, "output")["default_samplerate"])
         converter = StreamConverter(
-            lambda x, keep: self.model.convert(x, self.pitch_shift(), self.speaker_id, keep),
+            lambda x, keep, pos: self.model.convert(
+                x, self.pitch_shift(), self.speaker_id, keep, pos
+            ),
             self.model.sample_rate,
             in_sr,
             out_sr,

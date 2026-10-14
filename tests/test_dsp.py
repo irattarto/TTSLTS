@@ -72,3 +72,48 @@ def test_split_at_quiet_leaves_short_audio_alone():
 
     x = np.ones(16000 * 4, dtype=np.float32)
     assert len(split_at_quiet(x, 16000)) == 1
+
+
+def test_band_crossfade_keeps_alike_signals_unchanged():
+    from ttslts.audio.dsp import band_crossfade
+
+    a = sine(300, sr=48000, seconds=0.04) + sine(6000, sr=48000, seconds=0.04, amp=0.1)
+    y = band_crossfade(a, a, 48000)
+    assert np.abs(y - a).max() < 1e-4
+
+
+def test_band_crossfade_keeps_the_level_of_unrelated_noise():
+    """Hiss (an "sz") in two unrelated versions: equal-gain loses 3 dB halfway, this does not."""
+    from ttslts.audio.dsp import band_crossfade
+
+    rng = np.random.default_rng(0)
+    n, trials = 1920, 200
+    mid = slice(n // 2 - 200, n // 2 + 200)
+    plain = fixed = 0.0
+    for _ in range(trials):
+        a, b = rng.standard_normal((2, n)).astype(np.float32)
+        plain += float(np.mean(crossfade(a, b)[mid] ** 2))
+        fixed += float(np.mean(band_crossfade(a, b, 48000)[mid] ** 2))
+    assert 10 * np.log10(plain / trials) < -2.5
+    assert abs(10 * np.log10(fixed / trials)) < 0.5
+
+
+def test_band_crossfade_ends_on_the_two_signals():
+    from ttslts.audio.dsp import band_crossfade
+
+    rng = np.random.default_rng(1)
+    a, b = rng.standard_normal((2, 960)).astype(np.float32)
+    y = band_crossfade(a, b, 48000)
+    assert y[0] == pytest.approx(a[0], abs=1e-4) and y[-1] == pytest.approx(b[-1], abs=1e-4)
+
+
+def test_highpass_filter_streams_like_one_pass():
+    from scipy.signal import butter, sosfilt
+
+    from ttslts.audio.dsp import HIGHPASS_HZ, highpass_filter
+
+    x = np.random.default_rng(2).standard_normal(48000).astype(np.float32)
+    run = highpass_filter(48000)
+    streamed = np.concatenate([run(x[i : i + 4800]) for i in range(0, len(x), 4800)])
+    whole = sosfilt(butter(5, HIGHPASS_HZ, btype="high", fs=48000, output="sos"), x)
+    assert np.abs(streamed - whole).max() < 1e-4
