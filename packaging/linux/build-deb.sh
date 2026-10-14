@@ -31,7 +31,7 @@ Installed-Size: $size_kb
 Depends: libportaudio2, libegl1, libgl1, libxkbcommon-x11-0, libxcb-cursor0, libfontconfig1, libdbus-1-3
 Maintainer: TTSLTS
 Description: Offline text to speech and real-time voice changer
- System tray app with Kokoro text to speech and an RVC v2 voice changer.
+ System tray app with Hungarian text to speech (Piper) and an RVC v2 voice changer.
  Runs fully offline after the one-time model download.
 CONTROL
 

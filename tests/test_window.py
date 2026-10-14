@@ -127,21 +127,11 @@ def test_downloaded_rvc_base_paths_are_saved(make_window):
     assert w.contentvec_edit.text() == "/m/contentvec.onnx" and w.saved
 
 
-def test_engine_choice_switches_the_visible_rows(make_window):
-    w = make_window()
-    form = w._tts_form
-    assert form.isRowVisible(w.voice_combo) and not form.isRowVisible(w.piper_combo)
-    w.engine_combo.setCurrentIndex(w.engine_combo.findData("piper"))
-    assert w.settings.tts_engine == "piper"
-    assert form.isRowVisible(w.piper_combo)
-    assert not form.isRowVisible(w.voice_combo) and not form.isRowVisible(w.lang_combo)
-
-
 def test_installed_piper_voices_are_listed(make_window, monkeypatch):
     from ttslts.tts import piper_download
 
     monkeypatch.setattr(piper_download, "installed_voices", lambda base=None: ["hu_HU-imre-medium"])
-    w = make_window(tts_engine="piper")
+    w = make_window()
     assert [w.piper_combo.itemData(i) for i in range(w.piper_combo.count())] == [
         "hu_HU-imre-medium"
     ]
@@ -161,65 +151,6 @@ def test_piper_download_needs_consent(make_window, monkeypatch, accept):
     assert started == ([True] if accept else [])
 
 
-def _pick_language(w, code):
-    w.lang_combo.setCurrentIndex(w.lang_combo.findData(code))
-
-
-def test_choosing_hungarian_switches_to_piper_and_offers_the_download(make_window, monkeypatch):
-    from PySide6.QtCore import QTimer
-
-    from ttslts.tts import piper_download
-
-    monkeypatch.setattr(piper_download, "installed_voices", lambda base=None: [])
-    w = make_window()
-    offered = []
-    monkeypatch.setattr(w, "_download_piper", lambda: offered.append(True))
-    # run the deferred offer immediately instead of waiting for the event loop
-    monkeypatch.setattr(QTimer, "singleShot", staticmethod(lambda _ms, fn: fn()))
-
-    _pick_language(w, "hu")
-
-    assert w.settings.tts_engine == "piper" and w.settings.tts_lang == "hu"
-    assert offered == [True]
-
-
-def test_no_download_offer_when_voices_are_installed(make_window, monkeypatch):
-    from PySide6.QtCore import QTimer
-
-    from ttslts.tts import piper_download
-
-    monkeypatch.setattr(piper_download, "installed_voices", lambda base=None: ["hu_HU-anna-medium"])
-    w = make_window()
-    offered = []
-    monkeypatch.setattr(w, "_download_piper", lambda: offered.append(True))
-    monkeypatch.setattr(QTimer, "singleShot", staticmethod(lambda _ms, fn: fn()))
-
-    _pick_language(w, "hu")
-
-    assert w.settings.tts_engine == "piper" and offered == []
-
-
-def test_other_languages_stay_on_kokoro(make_window):
-    w = make_window()
-    _pick_language(w, "it")
-    assert w.settings.tts_engine == "kokoro" and w.settings.tts_lang == "it"
-
-
-def test_engine_can_be_set_back_to_kokoro_for_experimental_hungarian(make_window, monkeypatch):
-    from ttslts.tts import piper_download
-
-    monkeypatch.setattr(piper_download, "installed_voices", lambda base=None: ["hu_HU-anna-medium"])
-    w = make_window()
-    _pick_language(w, "hu")
-    assert w.settings.tts_engine == "piper"
-
-    w.engine_combo.setCurrentIndex(w.engine_combo.findData("kokoro"))
-
-    # the user's choice sticks: Kokoro keeps speaking Hungarian (experimental)
-    assert w.settings.tts_engine == "kokoro" and w.settings.tts_lang == "hu"
-    assert w._tts_form.isRowVisible(w.lang_combo)
-
-
 def test_piper_settings_have_help_text(make_window, monkeypatch):
     from ttslts.tts import piper_download
 
@@ -228,17 +159,28 @@ def test_piper_settings_have_help_text(make_window, monkeypatch):
         "installed_voices",
         lambda base=None: ["hu_HU-anna-medium", "hu_HU-imre-medium"],
     )
-    w = make_window(tts_engine="piper")
-    for widget in (w.engine_combo, w.piper_combo, w.variation_spin, w.rhythm_spin, w.speed_spin):
+    w = make_window()
+    for widget in (w.piper_combo, w.variation_spin, w.rhythm_spin, w.speed_spin):
         assert widget.toolTip().strip(), widget
     assert "Default" in w.variation_spin.toolTip() and "Default" in w.rhythm_spin.toolTip()
     # every listed voice explains itself on hover
     tips = [w.piper_combo.itemData(i, Qt.ItemDataRole.ToolTipRole) for i in range(2)]
     assert all(tips) and tips[0].startswith("Anna") and tips[1].startswith("Imre")
-    # a visible hint is shown with the Piper settings and hidden for Kokoro
-    assert w._tts_form.isRowVisible(w.piper_hint)
-    w.engine_combo.setCurrentIndex(w.engine_combo.findData("kokoro"))
-    assert not w._tts_form.isRowVisible(w.piper_hint)
+    assert w.piper_hint.text().strip()
+
+
+@pytest.mark.parametrize("installed", [[], ["hu_HU-anna-medium"]])
+def test_speak_offers_the_voices_when_none_is_installed(make_window, monkeypatch, installed):
+    from ttslts.tts import piper_download
+
+    monkeypatch.setattr(piper_download, "installed_voices", lambda base=None: installed)
+    w = make_window()
+    offered, spoken = [], []
+    monkeypatch.setattr(w, "_download_piper", lambda: offered.append(True))
+    monkeypatch.setattr(w.controller, "speak", spoken.append)
+    w.text_edit.setPlainText("Szia")
+    w.speak_btn.click()
+    assert (offered, spoken) == (([True], []) if not installed else ([], ["Szia"]))
 
 
 def test_train_tab_lists_files_and_saves_options(make_window, monkeypatch):

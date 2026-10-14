@@ -51,8 +51,6 @@ class Controller(QObject):
     ttsBusy = Signal(bool)
     vcRunning = Signal(bool)
     vcLatency = Signal(float)
-    voicesLoaded = Signal(list)
-    kokoroDownloaded = Signal(str, str)
     rvcBaseDownloaded = Signal(str, str)
     piperDownloaded = Signal(list)
     pretrainedDownloaded = Signal(int)
@@ -68,8 +66,6 @@ class Controller(QObject):
         self.settings = settings
         self._save = save or (lambda s: s.save())
         self._lock = threading.Lock()
-        self._kokoro = None
-        self._kokoro_key = None
         self._rvc = None
         self._rvc_key_loaded = None
         self._piper = None
@@ -101,18 +97,6 @@ class Controller(QObject):
         goes while something else (a game) has filled the card's memory.
         """
         return self.settings.use_gpu and not self.training and self._gpu_memory.allowed()
-
-    def kokoro(self):
-        s = self.settings
-        key = (s.kokoro_model_path, s.kokoro_voices_path, self.gpu_allowed())
-        with self._lock:
-            if self._kokoro is None or self._kokoro_key != key:
-                from ttslts.tts.kokoro_engine import KokoroEngine
-
-                self.status.emit("Loading Kokoro…")
-                self._kokoro = KokoroEngine.load(*key)
-                self._kokoro_key = key
-            return self._kokoro
 
     def piper(self):
         s = self.settings
@@ -203,27 +187,6 @@ class Controller(QObject):
                 self.error.emit(str(exc))
 
         threading.Thread(target=run, daemon=True, name=name).start()
-
-    def load_voices(self) -> None:
-        def work():
-            self.voicesLoaded.emit(self.kokoro().voices())
-            self.status.emit("Kokoro ready")
-
-        self._background(work, "load-voices")
-
-    def download_kokoro(self) -> None:
-        from ttslts.tts.download import download_kokoro
-
-        def progress(name, done, total):
-            pct = f" {done * 100 // total}%" if total else ""
-            self.status.emit(f"Downloading {name}{pct}")
-
-        def work():
-            model, voices = download_kokoro(progress)
-            self.kokoroDownloaded.emit(str(model), str(voices))
-            self.status.emit("Kokoro downloaded")
-
-        self._background(work, "download-kokoro")
 
     def download_piper_voices(self) -> None:
         """Fetch the Hungarian Piper voices. Call only after consent."""
@@ -392,8 +355,8 @@ class Controller(QObject):
             self.stop_vc()
             self.status.emit("Voice changer stopped: the graphics card is needed for training")
         with self._lock:
-            self._kokoro = self._piper = self._rvc = None
-            self._kokoro_key = self._piper_key = self._rvc_key_loaded = None
+            self._piper = self._rvc = None
+            self._piper_key = self._rvc_key_loaded = None
 
     def _read_training(self, proc: subprocess.Popen, log_file, work: Path) -> None:
         last_error = ""
@@ -454,14 +417,10 @@ class Controller(QObject):
         from ttslts.tts import pronunciation
 
         s = self.settings
-        language = "hu" if s.tts_engine == "piper" else s.tts_lang
-        text = pronunciation.apply_for(text, language, s.pron_builtin)
-        if s.tts_engine == "piper":
-            audio, sr = self.piper().synthesize(
-                text, s.tts_speed, noise_scale=s.piper_variation, noise_w=s.piper_rhythm
-            )
-        else:
-            audio, sr = self.kokoro().synthesize(text, s.tts_voice, s.tts_speed, s.tts_lang)
+        text = pronunciation.apply_for(text, "hu", s.pron_builtin)
+        audio, sr = self.piper().synthesize(
+            text, s.tts_speed, noise_scale=s.piper_variation, noise_w=s.piper_rhythm
+        )
         if s.tts_through_rvc and audio.size:
             model = self.rvc()
             self.status.emit("Applying voice model…")

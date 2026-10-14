@@ -1,6 +1,6 @@
 """Checks, once per model and graphics card, whether a model really runs on the GPU.
 
-A model can load on a GPU and still fail when it runs (Kokoro on DirectML), return garbage, or
+A model can load on a GPU and still fail when it runs (Kokoro did on DirectML), return garbage, or
 even crash the whole process. So the check runs in a separate process: it runs the model on the
 GPU and on the CPU with the same made-up inputs (a few sizes) and compares the results. The verdict
 is saved together with the model file, the ONNX Runtime version and the graphics card and driver, so

@@ -43,7 +43,7 @@ jobs:
         run: >
           pyinstaller --noconfirm --clean --windowed --name TTSLTS --paths src
           --icon icons\ttslts.ico
-          --collect-all kokoro_onnx --collect-all espeakng_loader --collect-all phonemizer
+          --collect-all espeakng_loader --collect-all phonemizer
           --collect-all language_tags --collect-all csvw --collect-binaries onnxruntime
           --collect-data sounddevice --collect-all _sounddevice_data
           --add-data "src\ttslts;pysrc\ttslts"
@@ -94,7 +94,7 @@ jobs:
       - name: Build
         run: >
           pyinstaller --noconfirm --clean --windowed --name TTSLTS --paths src
-          --collect-all kokoro_onnx --collect-all espeakng_loader --collect-all phonemizer
+          --collect-all espeakng_loader --collect-all phonemizer
           --collect-all language_tags --collect-all csvw --collect-binaries onnxruntime
           --collect-data sounddevice --collect-all _sounddevice_data
           --add-data "src/ttslts:pysrc/ttslts"

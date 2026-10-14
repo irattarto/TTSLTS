@@ -54,11 +54,6 @@ VOICE_NOTES: dict[str, str] = {
     ),
 }
 
-HELP_ENGINE = (
-    "Kokoro: 53 voices in nine languages. Hungarian there is experimental and clearly "
-    "accented.\nPiper: real Hungarian voices (Anna, Berta, Imre), downloaded separately "
-    "(Settings > Models)."
-)
 HELP_VOICE = (
     "Three different Hungarian speakers. They sound different (pitch and character), so "
     "listen to each one with your own text and keep the one you like. Hover a name for "
