@@ -261,3 +261,112 @@ def test_speech_requests_take_turns(monkeypatch):
     while len(finished) < 3 and time.time() < deadline:
         time.sleep(0.02)
     assert len(finished) == 3 and not any(overlaps)
+
+
+class FakeVoiceChanger:
+    made = []
+
+    def __init__(self, model, *args, **kwargs):
+        self.running = False
+        self.stopped = False
+        FakeVoiceChanger.made.append(self)
+
+    def start(self):
+        self.running = True
+
+    def stop(self):
+        self.running, self.stopped = False, True
+
+
+def _slow_start(monkeypatch, controller):
+    """The live model takes a while to load; returns (loading started, let it finish)."""
+    import threading
+
+    from ttslts.audio import devices
+    from ttslts.vc import realtime
+
+    loading, go_on = threading.Event(), threading.Event()
+
+    def live_rvc():
+        loading.set()
+        go_on.wait(5)
+        return type("M", (), {"session": type("S", (), {"get_providers": lambda s: ["Dml"]})()})()
+
+    FakeVoiceChanger.made = []
+    monkeypatch.setattr(realtime, "RealtimeVoiceChanger", FakeVoiceChanger)
+    monkeypatch.setattr(controller, "live_rvc", live_rvc)
+    monkeypatch.setattr(devices, "resolve", lambda *a: None)
+    return loading, go_on
+
+
+def _wait(cond, seconds=5.0):
+    import time
+
+    deadline = time.time() + seconds
+    while not cond() and time.time() < deadline:
+        time.sleep(0.01)
+    return cond()
+
+
+def test_second_start_while_starting_makes_no_second_voice_changer(monkeypatch):
+    controller = Controller(Settings(), save=lambda s: None)
+    loading, go_on = _slow_start(monkeypatch, controller)
+    controller.start_vc()
+    assert loading.wait(5)
+    controller.start_vc()  # clicked again while the model is still loading
+    controller.toggle_vc()  # or from the tray
+    go_on.set()
+    assert _wait(lambda: controller.vc_running)
+    assert len(FakeVoiceChanger.made) == 1
+
+
+def test_stop_while_starting_cancels_the_start(monkeypatch):
+    controller = Controller(Settings(), save=lambda s: None)
+    loading, go_on = _slow_start(monkeypatch, controller)
+    controller.start_vc()
+    assert loading.wait(5)
+    controller.stop_vc()  # the window already says "off"
+    go_on.set()
+    assert _wait(lambda: FakeVoiceChanger.made and FakeVoiceChanger.made[0].stopped)
+    assert not controller.vc_running and controller._vc is None
+    controller.start_vc()  # and it can be started again afterwards
+    assert _wait(lambda: controller.vc_running)
+
+
+def test_a_failed_start_turns_the_button_off(monkeypatch):
+    from PySide6.QtCore import Qt
+
+    controller = Controller(Settings(), save=lambda s: None)
+    reported = []
+    controller.vcRunning.connect(reported.append, Qt.ConnectionType.DirectConnection)
+
+    def broken():
+        raise ValueError("No RVC voice model selected")
+
+    monkeypatch.setattr(controller, "live_rvc", broken)
+    controller.start_vc()
+    assert _wait(lambda: reported == [False])
+    assert _wait(lambda: not controller._vc_starting)
+
+
+def test_a_download_runs_once_at_a_time(monkeypatch):
+    import threading
+
+    from ttslts.tts import piper_download
+
+    running, go_on, calls = threading.Event(), threading.Event(), []
+
+    def download(progress):
+        calls.append(1)
+        running.set()
+        go_on.wait(5)
+        return []
+
+    monkeypatch.setattr(piper_download, "download_voices", download)
+    controller = Controller(Settings(), save=lambda s: None)
+    controller.download_piper_voices()
+    assert running.wait(5)
+    controller.download_piper_voices()  # a second click while it downloads
+    go_on.set()
+    assert _wait(lambda: "download-piper" not in controller._busy_jobs)
+    assert calls == [1]

@@ -671,9 +671,9 @@ class MainWindow(QMainWindow):
         self.save_btn.setEnabled(not busy)
 
     def _on_vc_clicked(self, checked: bool) -> None:
+        # disabled until the voice changer reports it is on or off (starting takes seconds)
         self.vc_button.setEnabled(False)
         self.controller.start_vc() if checked else self.controller.stop_vc()
-        QTimer.singleShot(1500, lambda: self.vc_button.setEnabled(True))
 
     def _on_vc_running(self, running: bool) -> None:
         self.vc_button.setEnabled(True)
