@@ -240,3 +240,30 @@ def test_controller_passes_the_naturalness_settings(monkeypatch):
     monkeypatch.setattr(controller, "piper", lambda: Fake())
     controller.render_tts("Szia")
     assert seen == {"noise_scale": 0.4, "noise_w": 1.0}
+
+
+def test_pauses_follow_the_punctuation():
+    from ttslts.tts.piper_engine import (
+        LINE_PAUSE_S,
+        PARAGRAPH_PAUSE_S,
+        PAUSE_AFTER,
+        split_with_pauses,
+    )
+
+    got = split_with_pauses("Jó napot. Hogy van? Hát...\nMegvagyok.\n\nÚj bekezdés!")
+    assert got == [
+        ("Jó napot.", SENTENCE_PAUSE_S),
+        ("Hogy van?", PAUSE_AFTER["?"]),
+        ("Hát…", PAUSE_AFTER["…"]),
+        ("Megvagyok.", PARAGRAPH_PAUSE_S),
+        ("Új bekezdés!", PAUSE_AFTER["!"]),
+    ]
+    assert split_with_pauses("Egy sor\nmásik sor")[0] == ("Egy sor", LINE_PAUSE_S)
+
+
+def test_pause_after_a_question_is_longer():
+    session = FakeSession(samples=1000)
+    audio, sr = make_voice(session).synthesize("Ab? Ba.")
+    from ttslts.tts.piper_engine import PAUSE_AFTER
+
+    assert len(audio) == 1000 + int(PAUSE_AFTER["?"] * sr) + 1000
