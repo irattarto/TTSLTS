@@ -287,7 +287,7 @@ def _slow_start(monkeypatch, controller):
 
     loading, go_on = threading.Event(), threading.Event()
 
-    def live_rvc():
+    def live_rvc(gpu=None):
         loading.set()
         go_on.wait(5)
         return type("M", (), {"session": type("S", (), {"get_providers": lambda s: ["Dml"]})()})()
@@ -340,7 +340,7 @@ def test_a_failed_start_turns_the_button_off(monkeypatch):
     reported = []
     controller.vcRunning.connect(reported.append, Qt.ConnectionType.DirectConnection)
 
-    def broken():
+    def broken(gpu=None):
         raise ValueError("No RVC voice model selected")
 
     monkeypatch.setattr(controller, "live_rvc", broken)
