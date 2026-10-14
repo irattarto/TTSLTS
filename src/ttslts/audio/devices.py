@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import threading
 
 import numpy as np
 
@@ -47,12 +48,19 @@ def resolve(name: str, kind: str) -> int | None:
     return None
 
 
+# sounddevice's play()/stop() share one stream and are not thread-safe; speech is started on a
+# background thread and stopped from the window, so they take turns.
+_PLAY_LOCK = threading.Lock()
+
+
 def play(audio: np.ndarray, sr: int, device: int | None) -> None:
-    _sd().play(audio, sr, device=device)
+    with _PLAY_LOCK:
+        _sd().play(audio, sr, device=device)
 
 
 def stop() -> None:
-    try:
-        _sd().stop()
-    except Exception:
-        log.debug("Could not stop playback", exc_info=True)
+    with _PLAY_LOCK:
+        try:
+            _sd().stop()
+        except Exception:
+            log.debug("Could not stop playback", exc_info=True)

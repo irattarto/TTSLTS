@@ -10,6 +10,8 @@ search is a brute-force nearest-neighbour lookup, so no extra libraries are need
 from __future__ import annotations
 
 import logging
+import os
+import threading
 from pathlib import Path
 
 import numpy as np
@@ -18,6 +20,7 @@ log = logging.getLogger(__name__)
 
 MAX_VECTORS = 40000  # keeps the lookup fast; neighbouring frames of speech are very alike
 NEIGHBOURS = 8
+_BUILD_LOCK = threading.Lock()  # two loads of one voice at once build its index once
 
 
 def index_path(model_path: str | Path) -> Path:
@@ -36,11 +39,18 @@ def build(feats_dir: Path, out: Path, max_vectors: int = MAX_VECTORS, seed: int 
         keep = np.sort(np.random.default_rng(seed).choice(len(vectors), max_vectors, replace=False))
         vectors = vectors[keep]
     out.parent.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_name(out.name + ".tmp")
+    tmp = out.with_name(f"{out.name}.{os.getpid()}.{threading.get_ident()}.tmp")
     with open(tmp, "wb") as f:
         np.save(f, vectors.astype(np.float16))
     tmp.replace(out)
     return len(vectors)
+
+
+def build_once(feats_dir: Path, out: Path) -> None:
+    """``build`` unless the index is there already (also if another thread just made it)."""
+    with _BUILD_LOCK:
+        if not out.exists():
+            build(feats_dir, out)
 
 
 def _search_graph(vectors: np.ndarray, k: int):

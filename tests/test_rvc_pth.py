@@ -171,3 +171,32 @@ def test_models_without_skip_are_trimmed_to_the_newest_audio():
     assert not model.can_skip
     audio = np.random.default_rng(0).standard_normal(16000).astype(np.float32) * 0.1
     assert len(model.convert(audio, keep_16k=3200)) == round(3200 * 40000 / 16000)
+
+
+def test_two_loads_at_once_convert_a_voice_once(tmp_path, monkeypatch):
+    import threading
+    import time
+
+    path = _save(tmp_path, random_voice())
+    converted = []
+    real = rvc_pth.convert
+
+    def slow_convert(src, out):
+        converted.append(out)
+        time.sleep(0.2)
+        return real(src, out)
+
+    monkeypatch.setattr(rvc_pth, "convert", slow_convert)
+    results = []
+    threads = [
+        threading.Thread(
+            target=lambda: results.append(rvc_pth.ensure_onnx(path, str(tmp_path / "cache")))
+        )
+        for _ in range(2)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(converted) == 1 and results[0] == results[1]
+    assert not list((tmp_path / "cache").glob("*.tmp"))

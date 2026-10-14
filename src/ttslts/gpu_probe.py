@@ -18,6 +18,7 @@ import logging
 import os
 import subprocess
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -236,11 +237,21 @@ def probe_in_new_process(path: str) -> dict:
     }
 
 
+_VERDICT_LOCK = threading.Lock()
+
+
 def verdict(path: str, runner=probe_in_new_process, announce=None) -> dict | None:
     """The saved verdict for a model, running the check first if there is none yet.
 
     ``announce`` is called with a message just before a check that takes a while is started.
+    One check at a time: two at once checked the same model twice and the second save of the
+    results file dropped what the first had added.
     """
+    with _VERDICT_LOCK:
+        return _verdict(path, runner, announce)
+
+
+def _verdict(path: str, runner, announce) -> dict | None:
     if not enabled() or not Path(path).exists():
         return None
     cache = _load_cache()

@@ -77,6 +77,12 @@ class Controller(QObject):
         # One text to speech at a time; Stop also cancels speech that is still being made.
         self._tts_lock = threading.Lock()
         self._tts_generation = 0
+        # Starting the voice changer takes seconds (loading, warm-up): a second start in that
+        # time must not make a second one, and a stop must cancel the one being started.
+        self._vc_lock = threading.Lock()
+        self._vc_starting = False
+        self._vc_cancel = False
+        self._busy_jobs: set[str] = set()  # downloads and set-ups that are running
         onnx_util.set_fallback_notifier(self.status.emit)
         self._train_work: Path | None = None
 
@@ -177,19 +183,32 @@ class Controller(QObject):
                 in_voices = voice.parent.parent == paths.voices_dir()
                 if not (in_voices and features.is_dir()):
                     return None  # a voice from elsewhere has no index
-                retrieval.build(features, path)
+                retrieval.build_once(features, path)
             return retrieval.RetrievalIndex.load(path, use_gpu)
         except (OSError, ValueError) as exc:
             log.warning("Could not use the voice index %s: %s", path, exc)
             return None
 
-    def _background(self, fn: Callable[[], None], name: str) -> None:
+    def _background(self, fn: Callable[[], None], name: str, once: bool = False) -> None:
+        """Run ``fn`` on its own thread. ``once``: not again while it is still running (two
+        downloads of the same files would write the same partial file)."""
+        if once:
+            with self._vc_lock:
+                if name in self._busy_jobs:
+                    self.status.emit("Already in progress")
+                    return
+                self._busy_jobs.add(name)
+
         def run():
             try:
                 fn()
             except Exception as exc:
                 log.exception("%s failed", name)
                 self.error.emit(str(exc))
+            finally:
+                if once:
+                    with self._vc_lock:
+                        self._busy_jobs.discard(name)
 
         threading.Thread(target=run, daemon=True, name=name).start()
 
@@ -206,7 +225,7 @@ class Controller(QObject):
             self.piperDownloaded.emit(installed)
             self.status.emit("Hungarian voices ready")
 
-        self._background(work, "download-piper")
+        self._background(work, "download-piper", once=True)
 
     def download_rvc_base(self) -> None:
         """Fetch ContentVec and RMVPE from the original RVC project. Call only after consent."""
@@ -221,7 +240,7 @@ class Controller(QObject):
             self.rvcBaseDownloaded.emit(str(contentvec), str(rmvpe))
             self.status.emit("RVC base models ready")
 
-        self._background(work, "download-rvc-base")
+        self._background(work, "download-rvc-base", once=True)
 
     def download_pretrained(self, sample_rate: int) -> None:
         """Fetch the pretrained voice models training starts from. Call only after consent."""
@@ -236,7 +255,7 @@ class Controller(QObject):
             self.pretrainedDownloaded.emit(sample_rate)
             self.status.emit("Pretrained voice models ready")
 
-        self._background(work, "download-pretrained")
+        self._background(work, "download-pretrained", once=True)
 
     # -- training --------------------------------------------------------
     @staticmethod
@@ -259,7 +278,7 @@ class Controller(QObject):
             self.trainRuntimeInstalled.emit()
             self.status.emit("Training environment ready")
 
-        self._background(work, "install-train-runtime")
+        self._background(work, "install-train-runtime", once=True)
 
     @property
     def training(self) -> bool:
@@ -356,7 +375,7 @@ class Controller(QObject):
 
     def _release_gpu_models(self) -> None:
         """Free the graphics card for training: stop the voice changer, drop loaded models."""
-        if self.vc_running:
+        if self.vc_running or self._vc_starting:  # also one that is still starting
             self.stop_vc()
             self.status.emit("Voice changer stopped: the graphics card is needed for training")
         with self._lock:
@@ -508,10 +527,22 @@ class Controller(QObject):
         return self._vc is not None and self._vc.running
 
     def start_vc(self) -> None:
-        if self.vc_running:
-            return
+        with self._vc_lock:
+            if self.vc_running or self._vc_starting:
+                return
+            self._vc_starting, self._vc_cancel = True, False
 
         def work():
+            try:
+                start()
+            except Exception:
+                self.vcRunning.emit(False)  # the button must not stay on
+                raise
+            finally:
+                with self._vc_lock:
+                    self._vc_starting = False
+
+        def start():
             from ttslts.vc.realtime import RealtimeVoiceChanger
 
             s = self.settings
@@ -536,7 +567,15 @@ class Controller(QObject):
                 on_error=self._vc_failed,
             )
             vc.start()
-            self._vc = vc
+            with self._vc_lock:
+                cancelled = self._vc_cancel
+                if not cancelled:
+                    self._vc = vc
+            if cancelled:  # Stop (or training) came while it was starting
+                vc.stop()
+                self.vcRunning.emit(False)
+                self.status.emit("Voice changer off")
+                return
             self.vcRunning.emit(True)
             self.status.emit("Voice changer on")
 
@@ -547,7 +586,9 @@ class Controller(QObject):
         threading.Thread(target=self.stop_vc, daemon=True).start()
 
     def stop_vc(self) -> None:
-        vc, self._vc = self._vc, None
+        with self._vc_lock:
+            self._vc_cancel = self._vc_starting  # a start in progress ends as soon as it can
+            vc, self._vc = self._vc, None
         if vc is not None:
             vc.stop()
         self.vcRunning.emit(False)

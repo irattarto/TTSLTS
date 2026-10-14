@@ -15,6 +15,7 @@ Verified against the original PyTorch code in CI (``tools/verify_rvc_pth.py``).
 from __future__ import annotations
 
 import math
+import threading
 from dataclasses import dataclass
 
 import numpy as np
@@ -23,6 +24,9 @@ OPSET = 17
 SR_NAMES = {"32k": 32000, "40k": 40000, "48k": 48000}
 LRELU = 0.1
 HALF_HARMONICS = 0  # RVC uses a single (fundamental) source
+# Text to speech and the voice changer can load the same voice at once: one converts, the
+# other waits for its result instead of writing the same file.
+_CONVERT_LOCK = threading.Lock()
 
 
 class UnsupportedVoice(ValueError):
@@ -511,10 +515,11 @@ def ensure_onnx(pth_path: str, cache_dir: str | None = None) -> str:
     else:
         cache = Path(cache_dir)
     out = cache / f"{src.stem}-{digest[:10]}-v3.onnx"  # v3: skip and nsf_noise inputs
-    if out.exists():
-        return str(out)
-    cache.mkdir(parents=True, exist_ok=True)
-    tmp = out.with_suffix(".tmp")
-    convert(str(src), str(tmp))
-    os.replace(tmp, out)
+    with _CONVERT_LOCK:
+        if out.exists():
+            return str(out)
+        cache.mkdir(parents=True, exist_ok=True)
+        tmp = out.with_suffix(f".{os.getpid()}.tmp")  # another app instance may convert too
+        convert(str(src), str(tmp))
+        os.replace(tmp, out)
     return str(out)
