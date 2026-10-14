@@ -37,9 +37,7 @@ from ttslts import APP_NAME, paths
 from ttslts.audio import devices
 from ttslts.controller import Controller
 from ttslts.train import prepare
-from ttslts.tts.kokoro_engine import LANGUAGES
 from ttslts.tts.piper_download import (
-    HELP_ENGINE,
     HELP_RHYTHM,
     HELP_SPEED,
     HELP_VARIATION,
@@ -64,14 +62,6 @@ PERFORMANCE_HELP = {
 # Help for controls that are created without a tip of their own (see _apply_tooltips).
 TIPS = {
     "text_edit": "The text to read aloud.",
-    "voice_combo": (
-        "The Kokoro voice. The first letters tell language and gender, for example af = "
-        "American female, bm = British male. You can also type a voice name."
-    ),
-    "lang_combo": (
-        "The language Kokoro reads the text in. Choosing Hungarian switches to the Piper "
-        "engine, which has real Hungarian voices."
-    ),
     "tts_rvc_check": (
         "Run the speech through your RVC voice model, so the text is read in your own custom "
         "voice. Needs a Voice model and ContentVec (Settings > Models)."
@@ -132,8 +122,6 @@ TIPS = {
         "The close button hides the window to the tray; use Quit in the tray menu to exit."
     ),
     "start_min_check": "Start with only the tray icon showing.",
-    "kokoro_model_edit": "The Kokoro speech model file (kokoro-v1.0.onnx).",
-    "kokoro_voices_edit": "The Kokoro voices file (voices-v1.0.bin).",
     "contentvec_edit": (
         "ContentVec reads what is being said. It is needed by the voice changer, by text to "
         "speech through a voice, and by training. The download button below fetches it."
@@ -190,8 +178,6 @@ class MainWindow(QMainWindow):
         c.ttsBusy.connect(self._on_tts_busy)
         c.vcRunning.connect(self._on_vc_running)
         c.vcLatency.connect(self._on_latency)
-        c.voicesLoaded.connect(self._on_voices)
-        c.kokoroDownloaded.connect(self._on_kokoro_downloaded)
         c.rvcBaseDownloaded.connect(self._on_rvc_base_downloaded)
         c.piperDownloaded.connect(self._on_piper_downloaded)
         c.pretrainedDownloaded.connect(self._on_pretrained_downloaded)
@@ -201,9 +187,6 @@ class MainWindow(QMainWindow):
         c.trainProgress.connect(self._on_train_progress)
         c.trainSaved.connect(self._on_train_saved)
         c.trainFinished.connect(self._on_train_finished)
-
-        if self.settings.kokoro_model_path and self.settings.kokoro_voices_path:
-            QTimer.singleShot(0, controller.load_voices)
 
     # -- tabs ------------------------------------------------------------
     def _build_tts_tab(self) -> QWidget:
@@ -216,38 +199,16 @@ class MainWindow(QMainWindow):
         layout.addWidget(self.text_edit, 1)
 
         form = QFormLayout()
-        self.engine_combo = QComboBox()
-        self.engine_combo.addItem("Kokoro (9 languages)", "kokoro")
-        self.engine_combo.addItem("Piper (Hungarian voices)", "piper")
-        self.engine_combo.setCurrentIndex(max(0, self.engine_combo.findData(s.tts_engine)))
-        self.engine_combo.currentIndexChanged.connect(self._on_engine_changed)
-        self.engine_combo.setToolTip(HELP_ENGINE)
-        form.addRow("Engine", self.engine_combo)
-
         self.piper_combo = QComboBox()
         self.piper_combo.currentIndexChanged.connect(
             lambda i: self._set("piper_voice", self.piper_combo.itemData(i) or "")
         )
         self.piper_combo.setToolTip(HELP_VOICE)
-        form.addRow("Hungarian voice", self.piper_combo)
+        form.addRow("Voice", self.piper_combo)
         self.piper_hint = QLabel(HINT)
         self.piper_hint.setWordWrap(True)
         self.piper_hint.setStyleSheet("color: gray;")
         form.addRow(self.piper_hint)
-
-        self.voice_combo = QComboBox()
-        self.voice_combo.setEditable(True)
-        self.voice_combo.addItem(s.tts_voice)
-        self.voice_combo.currentTextChanged.connect(lambda v: self._set("tts_voice", v))
-        form.addRow("Voice", self.voice_combo)
-
-        self.lang_combo = QComboBox()
-        for code, label in LANGUAGES.items():
-            self.lang_combo.addItem(label, code)
-        self.lang_combo.setCurrentIndex(max(0, self.lang_combo.findData(s.tts_lang)))
-        self.lang_combo.currentIndexChanged.connect(self._on_language_changed)
-        form.addRow("Language", self.lang_combo)
-        self._tts_form = form
 
         self.variation_spin = QDoubleSpinBox(minimum=0.1, maximum=1.5, singleStep=0.05)
         self.variation_spin.setValue(s.piper_variation)
@@ -288,7 +249,7 @@ class MainWindow(QMainWindow):
 
         buttons = QHBoxLayout()
         self.speak_btn = QPushButton("Speak")
-        self.speak_btn.clicked.connect(lambda: self.controller.speak(self.text_edit.toPlainText()))
+        self.speak_btn.clicked.connect(self._speak)
         self.stop_btn = QPushButton("Stop")
         self.stop_btn.clicked.connect(self.controller.stop_speaking)
         self.save_btn = QPushButton("Save WAV…")
@@ -299,7 +260,6 @@ class MainWindow(QMainWindow):
             buttons.addWidget(b)
         layout.addLayout(buttons)
         self._refresh_piper_voices()
-        self._apply_engine()
         return w
 
     def _build_vc_tab(self) -> QWidget:
@@ -499,19 +459,6 @@ class MainWindow(QMainWindow):
 
         models_box = QGroupBox("Models")
         ml = QFormLayout(models_box)
-        self.kokoro_model_edit = self._path_row(
-            ml, "Kokoro model", "kokoro_model_path", "ONNX (*.onnx)"
-        )
-        self.kokoro_voices_edit = self._path_row(
-            ml, "Kokoro voices", "kokoro_voices_path", "Voices (*.bin *.npz)"
-        )
-        dl = QPushButton("Download Kokoro (~340 MB)")
-        dl.setToolTip(
-            "Download the Kokoro speech model and its 54 voices (Apache-2.0) from the "
-            "original project to this computer; used for text to speech in 9 languages"
-        )
-        dl.clicked.connect(self.controller.download_kokoro)
-        ml.addRow("", dl)
         self.rvc_model_edit = self._path_row(
             ml, "RVC v2 voice", "rvc_model_path", "RVC v2 voice (*.pth *.onnx)"
         )
@@ -765,32 +712,14 @@ class MainWindow(QMainWindow):
                 return
             self._set("pron_builtin", dialog.use_builtin())
 
-    # -- TTS engine ------------------------------------------------------
-    def _on_engine_changed(self, _index: int) -> None:
-        self._set("tts_engine", self.engine_combo.currentData())
-        self._apply_engine()
+    # -- Hungarian voices (Piper) ---------------------------------------
+    def _speak(self) -> None:
+        from ttslts.tts import piper_download
 
-    def _on_language_changed(self, index: int) -> None:
-        code = self.lang_combo.itemData(index)
-        self._set("tts_lang", code)
-        # Piper has real Hungarian voices, so it is the default for Hungarian. Only a language
-        # change switches; the engine can still be set back to Kokoro by hand afterwards.
-        if code == "hu" and self.settings.tts_engine == "kokoro":
-            self.engine_combo.setCurrentIndex(self.engine_combo.findData("piper"))
-            from ttslts.tts import piper_download
-
-            if not piper_download.installed_voices():
-                QTimer.singleShot(0, self._download_piper)
-
-    def _apply_engine(self) -> None:
-        piper = self.settings.tts_engine == "piper"
-        form = self._tts_form
-        form.setRowVisible(self.piper_combo, piper)
-        form.setRowVisible(self.piper_hint, piper)
-        form.setRowVisible(self.variation_spin, piper)
-        form.setRowVisible(self.rhythm_spin, piper)
-        form.setRowVisible(self.voice_combo, not piper)
-        form.setRowVisible(self.lang_combo, not piper)
+        if not piper_download.installed_voices():  # nothing to speak with yet: offer them
+            self._download_piper()
+            return
+        self.controller.speak(self.text_edit.toPlainText())
 
     def _refresh_piper_voices(self) -> None:
         from ttslts.tts import piper_download
@@ -831,15 +760,6 @@ class MainWindow(QMainWindow):
     def _on_piper_downloaded(self, _installed: list) -> None:
         self._refresh_piper_voices()
         self.controller.save_settings()
-
-    def _on_voices(self, voices: list) -> None:
-        current = self.settings.tts_voice
-        self.voice_combo.blockSignals(True)
-        self.voice_combo.clear()
-        self.voice_combo.addItems(voices)
-        self.voice_combo.blockSignals(False)
-        idx = self.voice_combo.findText(current)
-        self.voice_combo.setCurrentIndex(idx if idx >= 0 else 0)
 
     def _download_rvc_base(self) -> None:
         from ttslts.vc import rvc_base
@@ -1051,14 +971,6 @@ class MainWindow(QMainWindow):
         folder = paths.voices_dir() / self._train_name()
         folder.mkdir(parents=True, exist_ok=True)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(folder)))
-
-    def _on_kokoro_downloaded(self, model: str, voices: str) -> None:
-        self.kokoro_model_edit.setText(model)
-        self.kokoro_voices_edit.setText(voices)
-        self.settings.kokoro_model_path = model
-        self.settings.kokoro_voices_path = voices
-        self.controller.save_settings()
-        self.controller.load_voices()
 
     # -- tray behaviour --------------------------------------------------
     def _use_tray(self, enabled: bool) -> bool:

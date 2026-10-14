@@ -90,13 +90,11 @@ def test_models_stay_off_the_gpu_while_training(monkeypatch):
 
 def test_training_start_frees_loaded_models():
     controller = Controller(Settings(), save=lambda s: None)
-    controller._kokoro, controller._kokoro_key = object(), ("a", "b", True)
+    controller._piper, controller._piper_key = object(), ("a", True)
     controller._rvc, controller._rvc_key_loaded = object(), ("c",)
     controller._release_gpu_models()
     assert (
-        controller._kokoro is None
-        and controller._rvc is None
-        and controller._rvc_key_loaded is None
+        controller._piper is None and controller._rvc is None and controller._rvc_key_loaded is None
     )
 
 
@@ -106,9 +104,9 @@ def test_retry_gpu_clears_what_was_remembered(monkeypatch):
     cleared = []
     monkeypatch.setattr(onnx_util, "clear_gpu_failures", lambda: cleared.append(True))
     controller = Controller(Settings(), save=lambda s: None)
-    controller._kokoro, controller._kokoro_key = object(), ("a",)
+    controller._piper, controller._piper_key = object(), ("a",)
     controller.retry_gpu()
-    assert cleared and controller._kokoro is None
+    assert cleared and controller._piper is None
 
 
 def test_live_voice_changer_gets_its_own_model(monkeypatch):
@@ -145,8 +143,10 @@ def test_long_speech_is_converted_in_short_pieces(monkeypatch):
     monkeypatch.setattr(controller, "rvc", lambda: Rvc())
     monkeypatch.setattr(
         controller,
-        "kokoro",
-        lambda: type("K", (), {"synthesize": lambda *a: (np.ones(24000 * 40, "f") * 0.1, 24000)})(),
+        "piper",
+        lambda: type(
+            "P", (), {"synthesize": lambda *a, **k: (np.ones(22050 * 40, "f") * 0.1, 22050)}
+        )(),
     )
     try:
         controller.render_tts("a very long text")

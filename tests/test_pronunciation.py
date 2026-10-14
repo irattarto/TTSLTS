@@ -51,7 +51,7 @@ def test_built_in_list_is_only_for_hungarian():
     assert pronunciation.apply_for("FBI", "hu", use_builtin=False) == "FBI"
 
 
-def test_the_speech_engines_get_the_respelled_text(monkeypatch):
+def test_speech_gets_the_respelled_text(monkeypatch):
     pronunciation.save([Entry("Windows", "vindóz")])
     seen = []
 
@@ -60,33 +60,12 @@ def test_the_speech_engines_get_the_respelled_text(monkeypatch):
             seen.append(text)
             return np.ones(10, dtype=np.float32), 22050
 
-    piper = Controller(Settings(tts_engine="piper"), save=lambda s: None)
+    piper = Controller(Settings(), save=lambda s: None)
     monkeypatch.setattr(piper, "piper", lambda: Fake())
     piper.render_tts("A Windows és az FBI")
-    kokoro = Controller(Settings(tts_engine="kokoro", tts_lang="en-us"), save=lambda s: None)
-    monkeypatch.setattr(kokoro, "kokoro", lambda: Fake())
-    kokoro.render_tts("A Windows és az FBI")
-    assert seen == [
-        "A vindóz és az ef bí áj",
-        "A vindóz és az FBI",
-    ]  # built-in list: Hungarian only
-
-
-def test_kokoro_hungarian_uses_the_hungarian_text_clean_up():
-    from ttslts.tts.kokoro_engine import KokoroEngine
-
-    seen = []
-
-    class Raw:
-        def create(self, text, voice, speed, lang):
-            seen.append(text)
-            return np.ones(5, dtype=np.float32), 24000
-
-    engine = KokoroEngine(Raw())
-    engine.synthesize("Ez kb. 3 kg.", "af_heart", 1.0, "hu")
-    engine.synthesize("Ez kb. 3 kg.", "af_heart", 1.0, "en-us")
-    assert "körülbelül" in seen[0] and "kilogramm" in seen[0]
-    assert seen[1] == "Ez kb. 3 kg."
+    piper.settings.pron_builtin = False
+    piper.render_tts("A Windows és az FBI")
+    assert seen == ["A vindóz és az ef bí áj", "A vindóz és az FBI"]
 
 
 @pytest.fixture

@@ -170,7 +170,7 @@ def test_urls_use_the_model_card_file_name():
 
 
 def test_controller_uses_piper_when_selected(monkeypatch):
-    controller = Controller(Settings(tts_engine="piper", tts_speed=1.25), save=lambda s: None)
+    controller = Controller(Settings(tts_speed=1.25), save=lambda s: None)
     seen = {}
 
     class Fake:
@@ -184,7 +184,7 @@ def test_controller_uses_piper_when_selected(monkeypatch):
 
 
 def test_controller_explains_a_missing_voice(isolated_home):
-    controller = Controller(Settings(tts_engine="piper", piper_voice="hu_HU-anna-medium"))
+    controller = Controller(Settings(piper_voice="hu_HU-anna-medium"))
     with pytest.raises(ValueError, match="Download Hungarian voices"):
         controller.piper()
 
@@ -227,9 +227,7 @@ def test_hungarian_voices_expand_abbreviations_before_speaking(monkeypatch):
 
 
 def test_controller_passes_the_naturalness_settings(monkeypatch):
-    controller = Controller(
-        Settings(tts_engine="piper", piper_variation=0.4, piper_rhythm=1.0), save=lambda s: None
-    )
+    controller = Controller(Settings(piper_variation=0.4, piper_rhythm=1.0), save=lambda s: None)
     seen = {}
 
     class Fake:

@@ -80,8 +80,8 @@ def render(monkeypatch, tmp_path, **settings):
     monkeypatch.setattr(controller, "rvc", lambda: fake)
     monkeypatch.setattr(
         controller,
-        "kokoro",
-        lambda: type("K", (), {"synthesize": lambda *a: (np.ones(32000, "f"), 16000)})(),
+        "piper",
+        lambda: type("P", (), {"synthesize": lambda *a, **k: (np.ones(32000, "f"), 16000)})(),
     )
     controller.render_tts("hello")
     return fake.shifts

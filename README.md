@@ -2,7 +2,7 @@
 
 An offline system tray app for Windows with two features:
 
-- **Text to speech** with [Kokoro-82M](https://huggingface.co/hexgrad/Kokoro-82M) (Apache-2.0), 54 preset voices in 9 languages.
+- **Hungarian text to speech** with the [Piper](https://github.com/rhasspy/piper) voices Anna, Berta and Imre.
 - **Real-time voice changing** with [RVC v2](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI) (MIT) voice models.
 - **Training your own voice** from mp3 or wav recordings, saved as an RVC v2 `.pth` and an `.onnx` file (PyTorch is set up on first use).
 
@@ -45,14 +45,11 @@ Settings are saved automatically to `%APPDATA%\TTSLTS\settings.json`.
 
 ### Text to speech
 
-1. Settings > Models > **Download Kokoro** (about 340 MB, saved to `%APPDATA%\TTSLTS\models\kokoro`). You can also point the two fields at your own `kokoro-v1.0.onnx` and `voices-v1.0.bin`.
-2. On the **Text to Speech** tab, type text, pick a voice, language and speed, then **Speak** or **Save WAV…**.
+1. Settings > Models > **Download Hungarian voices** (about 190 MB, from the original [Piper voice collection](https://huggingface.co/rhasspy/piper-voices); you are asked to accept the terms first, and **Speak** offers it too while no voice is installed). The voices Anna, Berta and Imre use CC0 training data but were fine-tuned from Piper's US English *lessac* voice, whose data is licensed for research use, so keep them to research and personal use.
+2. On the **Text to Speech** tab, type text, pick a voice and speed, then **Speak** or **Save WAV…**. Anna, Berta and Imre are three different speakers, so listen to each with your own text and keep the one you like. Voice variation (default 0.67) and Rhythm variation (default 0.80) make the speech steadier when lowered and livelier when raised; well above the defaults it gets shaky. Common Hungarian abbreviations (kb., pl., dr., stb.) and units are read as words, and pauses follow the punctuation (longer after a question, "…", a line break or a new paragraph).
 3. **Play on** picks the output device. Choose a virtual cable to send speech into Discord, games or OBS.
-   **Hungarian:** choosing Hungarian as the language switches to the **Piper (Hungarian voices)** engine by default (you can set the engine back to Kokoro by hand). If the voices are not downloaded yet you are offered the download (Settings > Models > *Download Hungarian voices*) (Settings > Models > *Download Hungarian voices*, about 190 MB, from the original [Piper voice collection](https://huggingface.co/rhasspy/piper-voices); you are asked to accept the terms first). The voices Anna, Berta and Imre use CC0 training data but were fine-tuned from Piper's US English *lessac* voice, whose data is licensed for research use, so keep them to research and personal use. Voice variation (default 0.67) and Rhythm variation (default 0.80) make Piper steadier when lowered and livelier when raised, and every setting has hover help. Anna, Berta and Imre are three different speakers, so listen to each with your own text and keep the one you like. Common Hungarian abbreviations (kb., pl., dr., stb.) and units are read as words.
-
-   Kokoro's own **Hungarian (experimental)** language option, by contrast, is not a Kokoro language, so no voice was trained on it. Choosing it makes espeak-ng pronounce the Hungarian text (after the same abbreviation and unit clean-up) and one of the existing voices read it, so expect a foreign accent. The Android app has the same option.
    **Pronunciations…** (button on the Text to Speech tab, or select a word in the text and right-click it) lists words the voice says wrongly. Write each one the way it sounds in the language of the text, using that language's spelling: `Windows` -> `vindóz`, `Nvidia` -> `envídia`. Whole words only (`Windows-ban` works); *Match case* limits an entry to the exact capitalisation; **Listen** speaks the second column so you can check it. The file is `%APPDATA%\TTSLTS\pronunciations.json`. For Hungarian speech a built-in list also says FBI, CIA, USA, USB, DVD, PC, AI, IT and a few more the way Hungarians do, with English letter names (switch it off in the same window; an entry of your own wins).
-4. Tick **Speak with my voice model (RVC)** to run Kokoro's output through your RVC voice, giving TTS your custom voice.
+4. Tick **Speak with my voice model (RVC)** to run the speech through your RVC voice, giving TTS your custom voice.
 
 ### Voice changer
 
@@ -67,9 +64,9 @@ You supply the models (they are never bundled or committed):
 
 Then on the **Voice Changer** tab pick your microphone and output and press **Start**. To use the changed voice in other apps, set Output to a virtual cable such as [VB-Audio CABLE](https://vb-audio.com/Cable/) (*CABLE Input*) and select *CABLE Output* as the microphone in the other app.
 
-**Index rate** and **Protect consonants** (Voice Changer tab) make a voice trained in TTSLTS clearer and closer to the real recordings: training saves the features of your recordings next to the voice (`<name>.index.npy`, made on first use for older voices), and each frame of the converted speech is mixed with its closest real frames. Index rate 0.3-0.7 is a good range (0 switches it off, too high can sound rough); Protect keeps s, sh, f and breath sounds clear. Voices from elsewhere have no index, so these two do nothing for them. Joins between chunks are lined up with SOLA, and only the newest part of each chunk is synthesized, which keeps the delay and the load down.
+**Index rate** and **Protect consonants** (Voice Changer tab) make a voice trained in TTSLTS clearer and closer to the real recordings: training saves the features of your recordings next to the voice (`<name>.index.npy`, made on first use for older voices), and each frame of the converted speech is mixed with its closest real frames. Index rate 0.3-0.7 is a good range (0 switches it off, too high can sound rough); Protect keeps s, sh, f and breath sounds clear. Voices from elsewhere have no index, so these two do nothing for them; both can be changed while the voice changer runs. Joins between chunks are lined up with SOLA and crossfaded band by band, so the hiss of "s"/"sz" keeps its level through every join. The silence gate keeps quiet word endings and stays open 200 ms after the last sound.
 
-Latency is roughly chunk size + crossfade + processing time. Lower **Chunk size** for less delay, raise it if the voice crackles. **Context** is how much earlier audio the model sees each time (more is smoother but slower). The **Processing** readout should stay well under the chunk size.
+Latency is roughly chunk size + crossfade + processing time + a 40 ms safety margin (it grows by itself if the computer is sometimes slower) + the output device's own delay. Lower **Chunk size** for less delay, raise it if the voice crackles. **Context** is how much earlier audio the model sees each time: 1500 ms (the default) converts clearly better than 600 ms at no extra delay, only more GPU work. The **Processing** readout should stay well under the chunk size. A WASAPI output adds the least delay (about 20 ms against 90 ms for MME, measured with a virtual cable).
 
 ### Train your own voice
 
@@ -99,7 +96,7 @@ src/ttslts/
   controller.py     background work for TTS, voice changer, downloads
   settings.py       JSON settings (tray options default on)
   audio/            DSP helpers (resampling, YIN pitch, crossfade), devices, WAV
-  tts/              Kokoro engine and model download
+  tts/              Piper engine, Hungarian voices download, text clean-up, pronunciations
   vc/rvc.py         RVC v2 ONNX inference (ContentVec + pitch + voice model)
   vc/rvc_pth.py     .pth voice checkpoint -> ONNX importer (no PyTorch needed)
   vc/realtime.py    chunked streaming conversion with crossfades
@@ -110,7 +107,7 @@ src/ttslts/
 
 ## Licenses and consent
 
-Kokoro is Apache-2.0 and RVC is MIT, so both are usable commercially, but check the license of each voice model you use. The pretrained models used for training carry the RVC author's research-use clause (shown when you download them), and `train/rvc_model/` is RVC's MIT-licensed model code. Only clone voices you have permission to use.
+RVC is MIT, but check the license of each voice model you use; the Hungarian Piper voices are for research and personal use (see above). The pretrained models used for training carry the RVC author's research-use clause (shown when you download them), and `train/rvc_model/` is RVC's MIT-licensed model code. Only clone voices you have permission to use.
 
 ## Android app (text to speech only)
 

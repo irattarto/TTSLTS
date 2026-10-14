@@ -5,7 +5,7 @@ build-backend = "setuptools.build_meta"
 [project]
 name = "ttslts"
 version = "0.1.0"
-description = "Offline system tray app: Kokoro text-to-speech and RVC v2 real-time voice changing"
+description = "Offline system tray app: Hungarian text to speech (Piper) and RVC v2 real-time voice changing"
 readme = "README.md"
 requires-python = ">=3.10"
 license = { text = "MIT" }
@@ -16,7 +16,8 @@ dependencies = [
     "sounddevice>=0.4.6",
     "onnx>=1.16",
     "onnxruntime>=1.17",
-    "kokoro-onnx>=0.4.0",
+    "phonemizer>=3.4",
+    "espeakng-loader>=0.2.4",
 ]
 
 [project.optional-dependencies]

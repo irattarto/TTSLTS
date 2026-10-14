@@ -1,7 +1,7 @@
 """Offline text to speech with Piper voices (VITS models exported to ONNX).
 
 The ONNX files and their ``.onnx.json`` configs come from the Piper voice collection. Text is
-turned into IPA phonemes with espeak-ng (already required by Kokoro), mapped to ids with the
+turned into IPA phonemes with espeak-ng (the espeakng-loader package), mapped to ids with the
 voice's ``phoneme_id_map`` and run through ONNX Runtime. This follows Piper's own reference
 implementation: ids are ``BOS, (phoneme, PAD)*, EOS`` and the model takes ``input``,
 ``input_lengths``, ``scales`` (noise, length, noise_w) and, for multi-speaker voices, ``sid``.
