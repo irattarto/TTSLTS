@@ -719,6 +719,7 @@ class MainWindow(QMainWindow):
         if not piper_download.installed_voices():  # nothing to speak with yet: offer them
             self._download_piper()
             return
+        self._on_tts_busy(True)  # at once, so a quick second click cannot start another
         self.controller.speak(self.text_edit.toPlainText())
 
     def _refresh_piper_voices(self) -> None:

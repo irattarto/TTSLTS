@@ -130,7 +130,10 @@ class RetrievalIndex:
         """Squared distances and ids of the ``k`` closest index frames of every frame."""
         if self._session is not None and k == min(NEIGHBOURS, len(self.vectors)):
             try:
-                near, ids = self._session.run(None, {"q": q})
+                from ttslts.onnx_util import GPU_LOCK
+
+                with GPU_LOCK:  # one GPU run at a time in the whole program
+                    near, ids = self._session.run(None, {"q": q})
                 return np.asarray(near, dtype=np.float32), np.asarray(ids)
             except Exception as exc:
                 log.warning("Voice index search failed on the GPU, using the CPU: %s", exc)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import logging
+import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
@@ -89,6 +90,12 @@ def clear_gpu_failures() -> None:
     gpu_probe.clear()
 
 
+# Every run on the graphics card goes through this lock, one at a time. Two threads running
+# DirectML sessions at once (the same model or two different ones) crashed the whole program
+# with an access violation inside ONNX Runtime, or made the GPU "suspended" (reproduced).
+GPU_LOCK = threading.Lock()
+
+
 def providers(use_gpu: bool) -> list[str]:
     import onnxruntime as ort
 
@@ -106,6 +113,8 @@ class ResilientSession:
     repeated on the CPU, and the GPU is tried again after ``CPU_BACKOFF_S`` seconds. A failure
     that is not about memory or a busy card is counted; once it has happened ``SKIP_AFTER`` times
     for a model, that model goes straight to the CPU from then on (until the counts are cleared).
+
+    GPU runs are one at a time (``GPU_LOCK``), for every session of the program together.
     """
 
     def __init__(self, path: str, options, session):
@@ -132,7 +141,8 @@ class ResilientSession:
         if self.on_cpu:
             return self._cpu_session().run(*args, **kwargs)
         try:
-            return self._session.run(*args, **kwargs)
+            with GPU_LOCK:
+                return self._session.run(*args, **kwargs)
         except Exception as exc:
             transient = is_transient(exc)
             log.warning("GPU run failed for %s (%s); trying the CPU", self._path, exc)

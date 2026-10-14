@@ -74,6 +74,9 @@ class Controller(QObject):
         self._train_proc: subprocess.Popen | None = None
         self._rvc_timer: threading.Timer | None = None
         self._gpu_memory = GpuMemoryGate()
+        # One text to speech at a time; Stop also cancels speech that is still being made.
+        self._tts_lock = threading.Lock()
+        self._tts_generation = 0
         onnx_util.set_fallback_notifier(self.status.emit)
         self._train_work: Path | None = None
 
@@ -100,7 +103,9 @@ class Controller(QObject):
 
     def piper(self):
         s = self.settings
-        key = (s.piper_voice, self.gpu_allowed())
+        # on the CPU while the live voice changer runs: the GPU runs one model at a time, so a
+        # sentence on the GPU would hold the voice changer up
+        key = (s.piper_voice, self.gpu_allowed() and not self.vc_running)
         with self._lock:
             if self._piper is None or self._piper_key != key:
                 from ttslts.tts import piper_download
@@ -457,16 +462,24 @@ class Controller(QObject):
         return shift
 
     def speak(self, text: str) -> None:
+        generation = self._tts_generation
+
         def work():
             self.ttsBusy.emit(True)
             try:
-                self.status.emit("Synthesizing…")
-                audio, sr = self.render_tts(text)
-                if audio.size:
-                    devices.play(
-                        audio, sr, devices.resolve(self.settings.tts_output_device, "output")
-                    )
-                self.status.emit("Speaking")
+                with self._tts_lock:
+                    if generation != self._tts_generation:
+                        return  # stopped before it started
+                    self.status.emit("Synthesizing…")
+                    audio, sr = self.render_tts(text)
+                    if generation != self._tts_generation:
+                        self.status.emit("Stopped")
+                        return
+                    if audio.size:
+                        devices.play(
+                            audio, sr, devices.resolve(self.settings.tts_output_device, "output")
+                        )
+                    self.status.emit("Speaking")
             finally:
                 self.ttsBusy.emit(False)
 
@@ -476,7 +489,8 @@ class Controller(QObject):
         def work():
             self.ttsBusy.emit(True)
             try:
-                audio, sr = self.render_tts(text)
+                with self._tts_lock:
+                    audio, sr = self.render_tts(text)
                 write_wav(path, audio, sr)
                 self.status.emit(f"Saved {path}")
             finally:
@@ -485,6 +499,7 @@ class Controller(QObject):
         self._background(work, "tts-save")
 
     def stop_speaking(self) -> None:
+        self._tts_generation += 1  # speech still being made is not played
         devices.stop()
 
     # -- voice changer ---------------------------------------------------
