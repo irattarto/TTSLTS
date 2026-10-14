@@ -6,7 +6,6 @@ import android.media.AudioFormat
 import android.media.AudioTrack
 import com.k2fsa.sherpa.onnx.OfflineTts
 import com.k2fsa.sherpa.onnx.OfflineTtsConfig
-import com.k2fsa.sherpa.onnx.OfflineTtsKokoroModelConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsModelConfig
 import com.k2fsa.sherpa.onnx.OfflineTtsVitsModelConfig
 import java.io.File
@@ -15,54 +14,16 @@ import java.nio.ByteBuffer
 import java.nio.ByteOrder
 import kotlin.math.max
 
-/** Wraps the sherpa-onnx engines (Kokoro, Piper): streaming playback and WAV export. */
+/** Wraps the sherpa-onnx Piper (VITS) engine: streaming playback and WAV export. */
 class Speaker(private val context: Context) {
     private var tts: OfflineTts? = null
-    /** Which model is loaded ("kokoro:<language>" or "piper:<voice id>"); a change reloads. */
+    /** Which voice is loaded ("piper:<voice id>"); a change reloads. */
     private var loadedKey: String? = null
 
     @Volatile
     private var stopRequested = false
 
     val numSpeakers: Int get() = tts?.numSpeakers() ?: 0
-
-    /**
-     * Loads the model (a few seconds). Blocking; call from a background thread.
-     *
-     * [language] is an espeak-ng voice such as "hu", or "" for the model's built-in English and
-     * Chinese lexicons. sherpa-onnx fixes it when the model is created, so changing it reloads.
-     */
-    @Synchronized
-    fun load(language: String = "") {
-        val key = "kokoro:$language"
-        if (tts != null && loadedKey == key) return
-        tts?.release()
-        tts = null
-        val dir = ModelStore.modelDir(context)
-        fun existing(vararg names: String) =
-            names.map { File(dir, it) }.filter { it.exists() }.joinToString(",") { it.absolutePath }
-
-        val kokoro = OfflineTtsKokoroModelConfig(
-            model = File(dir, "model.onnx").absolutePath,
-            voices = File(dir, "voices.bin").absolutePath,
-            tokens = File(dir, "tokens.txt").absolutePath,
-            dataDir = File(dir, "espeak-ng-data").absolutePath,
-            lexicon = existing("lexicon-us-en.txt", "lexicon-zh.txt"),
-            dictDir = File(dir, "dict").takeIf { it.isDirectory }?.absolutePath ?: "",
-            lang = language,
-        )
-        val config = OfflineTtsConfig(
-            model = OfflineTtsModelConfig(
-                kokoro = kokoro,
-                numThreads = max(2, Runtime.getRuntime().availableProcessors().coerceAtMost(4)),
-                debug = false,
-                provider = "cpu",
-            ),
-            ruleFsts = existing("phone-zh.fst", "date-zh.fst", "number-zh.fst"),
-        )
-        tts = OfflineTts(config = config)
-        loadedKey = key
-    }
 
     /** Loads a Piper voice (a few seconds). Blocking; call from a background thread. */
     @Synchronized
