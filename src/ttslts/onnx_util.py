@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import itertools
 import json
 import logging
 import threading
@@ -90,10 +91,19 @@ def clear_gpu_failures() -> None:
     gpu_probe.clear()
 
 
-# Every run on the graphics card goes through this lock, one at a time. Two threads running
-# DirectML sessions at once (the same model or two different ones) crashed the whole program
-# with an access violation inside ONNX Runtime, or made the GPU "suspended" (reproduced).
-GPU_LOCK = threading.Lock()
+# Everything a GPU session does goes through this lock, one thread at a time: running, being
+# created and being freed. Two threads running DirectML sessions at once crash the program
+# with an access violation inside ONNX Runtime (reproduced). Re-entrant, because a session may
+# be freed by the garbage collector in a thread that already holds it.
+GPU_LOCK = threading.RLock()
+
+# DirectML (ONNX Runtime 1.24.4) breaks every GPU session that was created *before* a session
+# that is freed: their next run is an access violation, even on one thread and with nothing
+# else running (reproduced; sessions created after the freed one are fine). Text to speech hit
+# it when its voice model was released after a minute and Piper spoke again. So sessions are
+# numbered as they are made, and one that is older than a freed one is made anew before it runs.
+_made = itertools.count()
+_freed_newest = -1  # number of the newest GPU session freed so far
 
 
 def providers(use_gpu: bool) -> list[str]:
@@ -114,15 +124,44 @@ class ResilientSession:
     that is not about memory or a busy card is counted; once it has happened ``SKIP_AFTER`` times
     for a model, that model goes straight to the CPU from then on (until the counts are cleared).
 
-    GPU runs are one at a time (``GPU_LOCK``), for every session of the program together.
+    GPU runs are one at a time (``GPU_LOCK``), for every session of the program together, and
+    a session that a freed newer one has broken is made anew first (see ``_freed_newest``).
+    ``source`` is the model file or its bytes, when ``path`` is only a name for messages.
     """
 
-    def __init__(self, path: str, options, session):
+    def __init__(self, path: str, options, session, source=None):
         self._path = path
+        self._source = path if source is None else source
         self._options = options
+        self._providers = session.get_providers()
         self._session = session
+        self._number = next(_made)
         self._cpu = None
         self._cpu_until = 0.0
+
+    def __del__(self):
+        global _freed_newest
+        session = self.__dict__.get("_session")
+        if session is None:
+            return
+        try:
+            with GPU_LOCK:  # freed while no other thread uses the card
+                _freed_newest = max(_freed_newest, self._number)
+                self.__dict__["_session"] = None
+                del session
+        except Exception:  # at interpreter exit the module may already be gone
+            pass
+
+    def _renew_if_broken(self) -> None:
+        """Make the GPU session anew if a newer one was freed since it was made."""
+        import onnxruntime as ort
+
+        if self._number >= _freed_newest:
+            return
+        log.info("Making %s anew on the GPU (a newer session was freed)", self._path)
+        fresh = ort.InferenceSession(self._source, self._options, providers=self._providers)
+        self._session = fresh  # the broken one is older than the fresh one, so freeing it is safe
+        self._number = next(_made)
 
     @property
     def on_cpu(self) -> bool:
@@ -133,7 +172,7 @@ class ResilientSession:
 
         if self._cpu is None:
             self._cpu = ort.InferenceSession(
-                self._path, sess_options=self._options, providers=["CPUExecutionProvider"]
+                self._source, sess_options=self._options, providers=["CPUExecutionProvider"]
             )
         return self._cpu
 
@@ -142,6 +181,7 @@ class ResilientSession:
             return self._cpu_session().run(*args, **kwargs)
         try:
             with GPU_LOCK:
+                self._renew_if_broken()
                 return self._session.run(*args, **kwargs)
         except Exception as exc:
             transient = is_transient(exc)
@@ -159,6 +199,8 @@ class ResilientSession:
             return result
 
     def __getattr__(self, name: str):
+        if name.startswith("_"):  # not set up (yet): no endless lookup through _session
+            raise AttributeError(name)
         return getattr(self._session, name)
 
 
@@ -190,7 +232,11 @@ def make_session(path: str, use_gpu: bool):
             chosen = ["CPUExecutionProvider"]
     opts = session_options(chosen)
     try:
-        session = ort.InferenceSession(path, sess_options=opts, providers=chosen)
+        if chosen == ["CPUExecutionProvider"]:
+            session = ort.InferenceSession(path, sess_options=opts, providers=chosen)
+        else:
+            with GPU_LOCK:  # creating one also works on the card (see GPU_LOCK)
+                session = ort.InferenceSession(path, sess_options=opts, providers=chosen)
     except Exception as exc:  # no usable GPU / driver: run on the CPU instead of failing
         if chosen == ["CPUExecutionProvider"]:
             raise

@@ -370,3 +370,15 @@ def test_a_download_runs_once_at_a_time(monkeypatch):
     go_on.set()
     assert _wait(lambda: "download-piper" not in controller._busy_jobs)
     assert calls == [1]
+
+
+def test_start_after_stop_while_starting_still_starts(monkeypatch):
+    controller = Controller(Settings(), save=lambda s: None)
+    loading, go_on = _slow_start(monkeypatch, controller)
+    controller.start_vc()
+    assert loading.wait(5)
+    controller.stop_vc()
+    controller.start_vc()  # changed their mind while it was still loading
+    go_on.set()
+    assert _wait(lambda: controller.vc_running)
+    assert len(FakeVoiceChanger.made) == 1 and not FakeVoiceChanger.made[0].stopped

@@ -528,7 +528,10 @@ class Controller(QObject):
 
     def start_vc(self) -> None:
         with self._vc_lock:
-            if self.vc_running or self._vc_starting:
+            if self._vc_starting:  # still starting: Start again after a Stop means go on
+                self._vc_cancel = False
+                return
+            if self.vc_running:
                 return
             self._vc_starting, self._vc_cancel = True, False
 
