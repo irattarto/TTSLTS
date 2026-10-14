@@ -13,23 +13,17 @@ import org.apache.commons.compress.compressors.bzip2.BZip2CompressorInputStream
 /** Downloads and locates model files from the sherpa-onnx `tts-models` release. */
 object ModelStore {
     private const val BASE_URL = "https://github.com/k2-fsa/sherpa-onnx/releases/download/tts-models"
-    private const val KOKORO_DIR = "kokoro-multi-lang-v1_0"
+    /** Models that older versions downloaded and this one no longer uses (Kokoro). */
+    private val OLD_DIRS = listOf("kokoro-multi-lang-v1_0")
 
     /** Where the model in the archive named [dirName] is unpacked. */
-    fun modelDir(context: Context, dirName: String = KOKORO_DIR): File =
+    fun modelDir(context: Context, dirName: String): File =
         File(context.filesDir, "models/$dirName")
 
-    fun isInstalled(context: Context): Boolean {
-        val dir = modelDir(context)
-        return File(dir, "model.onnx").isFile &&
-            File(dir, "voices.bin").isFile &&
-            File(dir, "tokens.txt").isFile &&
-            File(dir, "espeak-ng-data").isDirectory
+    /** Frees the space of models older versions downloaded. Blocking. */
+    fun removeOldModels(context: Context) {
+        for (name in OLD_DIRS) modelDir(context, name).deleteRecursively()
     }
-
-    /** Kokoro: downloads the multi-language model (several hundred MB). */
-    fun download(context: Context, onProgress: (Long, Long) -> Unit) =
-        downloadArchive(context, KOKORO_DIR, "model.onnx", onProgress)
 
     /**
      * Downloads the archive [dirName].tar.bz2 and unpacks it while streaming, so no temporary

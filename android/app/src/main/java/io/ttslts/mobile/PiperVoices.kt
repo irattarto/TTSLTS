@@ -16,10 +16,7 @@ object PiperVoices {
         PiperVoiceInfo("hu_HU-imre-medium", "Imre", "lower pitch, about 115 Hz"),
     )
 
-    // Help texts (long-press a setting to see them) and a visible tip for the Piper engine.
-    const val HELP_ENGINE =
-        "Kokoro: 53 voices in nine languages; Hungarian there is experimental and accented. " +
-            "Piper: real Hungarian voices (Anna, Berta, Imre), downloaded on demand."
+    // Help texts (long-press a setting to see them) and a visible tip.
     const val HELP_VOICE =
         "Three different Hungarian speakers. They differ in pitch and character, so listen to " +
             "each with your own text and keep the one you like."

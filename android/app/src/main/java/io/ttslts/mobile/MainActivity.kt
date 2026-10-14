@@ -23,7 +23,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.result.contract.ActivityResultContracts
 import java.util.concurrent.Executors
 
-/** Single-screen offline text-to-speech with Kokoro and Piper (Hungarian). */
+/** Single-screen offline Hungarian text to speech with the Piper voices. */
 class MainActivity : ComponentActivity() {
     private val worker = Executors.newSingleThreadExecutor()
     private lateinit var speaker: Speaker
@@ -32,10 +32,6 @@ class MainActivity : ComponentActivity() {
     private lateinit var progress: ProgressBar
     private lateinit var download: Button
     private lateinit var input: EditText
-    private lateinit var engine: Spinner
-    private lateinit var languageLabel: TextView
-    private lateinit var piperHint: TextView
-    private lateinit var language: Spinner
     private lateinit var voice: Spinner
     private lateinit var speedLabel: TextView
     private lateinit var speed: SeekBar
@@ -45,20 +41,6 @@ class MainActivity : ComponentActivity() {
 
     private var busy = false
     private var ready = false
-
-    /** Label and sherpa-onnx espeak voice ("" keeps the model's built-in lexicons). */
-    private val languages = listOf(
-        "Default (English, Chinese and the model's other languages)" to "",
-        "Hungarian (experimental, existing voices)" to "hu",
-    )
-    private var selectedLanguage = ""
-
-    /** Kokoro covers nine languages; Piper has real Hungarian voices. */
-    private val engines = listOf(
-        "Kokoro (9 languages)" to "kokoro",
-        "Piper (Hungarian voices)" to "piper",
-    )
-    private var selectedEngine = "kokoro"
     private var piperIndex = 0
 
     private val saveWav =
@@ -69,13 +51,18 @@ class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         speaker = Speaker(applicationContext)
+        // start on a voice that is already downloaded, if there is one
+        piperIndex = PiperVoices.all.indexOfFirst { PiperVoices.isInstalled(this, it) }.coerceAtLeast(0)
         setContentView(buildUi())
 
         if (savedInstanceState == null && intent?.action == Intent.ACTION_SEND) {
             intent.getStringExtra(Intent.EXTRA_TEXT)?.let { input.setText(it) }
         }
 
-        if (ModelStore.isInstalled(this)) loadModel() else showNeedsModel()
+        // The Kokoro model of older versions (several hundred MB) is no longer used.
+        worker.execute { ModelStore.removeOldModels(applicationContext) }
+        val info = currentVoice()
+        if (PiperVoices.isInstalled(this, info)) loadPiper(info) else showNeedsVoice(info)
     }
 
     override fun onDestroy() {
@@ -107,8 +94,8 @@ class MainActivity : ComponentActivity() {
         column.addView(progress, matchWidth())
 
         download = Button(this).apply {
-            text = "Download voice model"
-            setOnClickListener { onDownloadClicked() }
+            text = "Download Hungarian voice"
+            setOnClickListener { ensurePiperAndLoad() }
         }
         column.addView(download, matchWidth())
 
@@ -121,68 +108,14 @@ class MainActivity : ComponentActivity() {
         column.addView(input, matchWidth().apply { topMargin = dp(12) })
 
         column.addView(TextView(this).apply {
-            text = "Engine"
-            setPadding(0, dp(12), 0, 0)
-        })
-        engine = Spinner(this).apply {
-            adapter = ArrayAdapter(
-                this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
-                engines.map { it.first },
-            )
-            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(parent: AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                    val code = engines[pos].second
-                    if (code != selectedEngine) {
-                        selectedEngine = code
-                        onEngineChanged()
-                    }
-                }
-
-                override fun onNothingSelected(parent: AdapterView<*>?) = Unit
-            }
-        }
-        engine.tooltipText = PiperVoices.HELP_ENGINE
-        column.addView(engine, matchWidth())
-
-        languageLabel = TextView(this).apply {
-            text = "Language"
-            setPadding(0, dp(12), 0, 0)
-        }
-        column.addView(languageLabel)
-        language = Spinner(this).apply {
-            adapter = ArrayAdapter(
-                this@MainActivity, android.R.layout.simple_spinner_dropdown_item,
-                languages.map { it.first },
-            )
-            onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-                override fun onItemSelected(parent: AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                    val code = languages[pos].second
-                    if (code != selectedLanguage) {
-                        selectedLanguage = code
-                        if (code == "hu" && selectedEngine == "kokoro" && !busy) {
-                            // Piper has real Hungarian voices, so it is the default for Hungarian.
-                            // Switching the engine back to Kokoro by hand keeps its experimental one.
-                            engine.setSelection(engines.indexOfFirst { it.second == "piper" })
-                        } else if (ready && !busy) {
-                            loadModel()
-                        }
-                    }
-                }
-
-                override fun onNothingSelected(parent: AdapterView<*>?) = Unit
-            }
-        }
-        column.addView(language, matchWidth())
-
-        column.addView(TextView(this).apply {
             text = "Voice"
             setPadding(0, dp(12), 0, 0)
         })
         voice = Spinner(this).apply {
             onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
                 override fun onItemSelected(parent: AdapterView<*>?, v: View?, pos: Int, id: Long) {
-                    // Only a real change of the Piper voice reloads; filling the list does not.
-                    if (selectedEngine == "piper" && pos != piperIndex) {
+                    // Only a real change of the voice reloads; filling the list does not.
+                    if (pos != piperIndex) {
                         piperIndex = pos
                         if (!busy) ensurePiperAndLoad()
                     }
@@ -194,12 +127,10 @@ class MainActivity : ComponentActivity() {
         voice.tooltipText = PiperVoices.HELP_VOICE
         column.addView(voice, matchWidth())
 
-        piperHint = TextView(this).apply {
+        column.addView(TextView(this).apply {
             text = PiperVoices.HINT
-            visibility = View.GONE
             setPadding(0, dp(4), 0, 0)
-        }
-        column.addView(piperHint)
+        })
 
         speedLabel = TextView(this).apply { setPadding(0, dp(12), 0, 0) }
         column.addView(speedLabel)
@@ -237,6 +168,7 @@ class MainActivity : ComponentActivity() {
         }
         column.addView(buttons, matchWidth().apply { topMargin = dp(12) })
 
+        populatePiperVoices()
         refreshControls()
         return ScrollView(this).apply { addView(column) }
     }
@@ -246,9 +178,7 @@ class MainActivity : ComponentActivity() {
         val enabled = ready && !busy
         speak.isEnabled = enabled
         save.isEnabled = enabled
-        voice.isEnabled = ready
-        engine.isEnabled = !busy
-        language.isEnabled = ready && !busy
+        voice.isEnabled = !busy
         stop.isEnabled = ready
     }
 
@@ -263,31 +193,9 @@ class MainActivity : ComponentActivity() {
     private fun matchWidth() =
         LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT)
 
-    // --- Engine ---------------------------------------------------------------------------
+    // --- Voices ---------------------------------------------------------------------------
 
-    private fun onEngineChanged() {
-        val piper = selectedEngine == "piper"
-        languageLabel.visibility = if (piper) View.GONE else View.VISIBLE
-        language.visibility = if (piper) View.GONE else View.VISIBLE
-        piperHint.visibility = if (piper) View.VISIBLE else View.GONE
-        download.text = if (piper) "Download Hungarian voice" else "Download voice model"
-        ready = false
-        refreshControls()
-        if (piper) {
-            populatePiperVoices()
-            ensurePiperAndLoad()
-        } else if (ModelStore.isInstalled(this)) {
-            loadModel()
-        } else {
-            showNeedsModel()
-        }
-    }
-
-    private fun onDownloadClicked() {
-        if (selectedEngine == "piper") ensurePiperAndLoad() else startDownload()
-    }
-
-    private fun currentSpeakerId() = if (selectedEngine == "piper") 0 else voice.selectedItemPosition
+    private fun currentVoice() = PiperVoices.all[piperIndex.coerceIn(0, PiperVoices.all.lastIndex)]
 
     private fun populatePiperVoices() {
         val labels = PiperVoices.all.map { v ->
@@ -298,15 +206,20 @@ class MainActivity : ComponentActivity() {
         voice.setSelection(piperIndex.coerceIn(0, labels.lastIndex))
     }
 
+    private fun showNeedsVoice(info: PiperVoiceInfo) {
+        ready = false
+        status.text = "The Hungarian voice ${info.name} is not downloaded yet (about 65 MB). " +
+            "Everything works offline afterwards."
+        refreshControls()
+    }
+
     private fun ensurePiperAndLoad() {
-        val info = PiperVoices.all[piperIndex.coerceIn(0, PiperVoices.all.lastIndex)]
+        val info = currentVoice()
         if (PiperVoices.isInstalled(this, info)) loadPiper(info) else askPiperConsent(info)
     }
 
     private fun askPiperConsent(info: PiperVoiceInfo) {
-        ready = false
-        status.text = "The Hungarian voice ${info.name} is not downloaded yet."
-        refreshControls()
+        showNeedsVoice(info)
         AlertDialog.Builder(this)
             .setTitle(PiperVoices.CONSENT_TITLE)
             .setMessage(PiperVoices.CONSENT_TEXT)
@@ -378,101 +291,18 @@ class MainActivity : ComponentActivity() {
         }
     }
 
-    // --- Model ----------------------------------------------------------------------------
-
-    private fun showNeedsModel() {
-        ready = false
-        status.text = "The Kokoro voice model is not installed yet. It is a large download " +
-            "(several hundred MB), so use Wi-Fi. Everything works offline afterwards."
-        refreshControls()
-    }
-
-    private fun startDownload() {
-        busy = true
-        status.text = "Downloading voice model…"
-        progress.visibility = View.VISIBLE
-        progress.isIndeterminate = true
-        refreshControls()
-        worker.execute {
-            try {
-                ModelStore.download(this) { done, total ->
-                    runOnUiThread {
-                        if (total > 0) {
-                            progress.isIndeterminate = false
-                            progress.max = 1000
-                            progress.progress = (done * 1000 / total).toInt()
-                            status.text = "Downloading voice model… %d / %d MB"
-                                .format(done shr 20, total shr 20)
-                        } else {
-                            status.text = "Downloading voice model… ${done shr 20} MB"
-                        }
-                    }
-                }
-                runOnUiThread {
-                    progress.visibility = View.GONE
-                    busy = false
-                    loadModel()
-                }
-            } catch (e: Exception) {
-                runOnUiThread {
-                    progress.visibility = View.GONE
-                    busy = false
-                    showNeedsModel()
-                    status.text = "Download failed: ${e.message}\n\n${status.text}"
-                }
-            }
-        }
-    }
-
-    private fun loadModel() {
-        busy = true
-        status.text = "Loading voice model…"
-        refreshControls()
-        val code = selectedLanguage
-        worker.execute {
-            try {
-                speaker.load(code)
-                val labels = Voices.labels(speaker.numSpeakers)
-                runOnUiThread {
-                    val previous = voice.selectedItemPosition
-                    voice.adapter = ArrayAdapter(
-                        this, android.R.layout.simple_spinner_dropdown_item, labels,
-                    )
-                    // Keep the chosen voice across a language change; otherwise start on
-                    // af_heart, Kokoro's flagship English voice.
-                    voice.setSelection(
-                        if (previous in labels.indices) previous
-                        else labels.indexOf("af_heart").coerceAtLeast(0),
-                    )
-                    ready = true
-                    busy = false
-                    status.text = "Ready. Running fully offline."
-                    refreshControls()
-                }
-            } catch (e: Throwable) {
-                runOnUiThread {
-                    ready = false
-                    busy = false
-                    showNeedsModel()
-                    status.text = "Could not load the model: ${e.message}"
-                }
-            }
-        }
-    }
-
     // --- Actions --------------------------------------------------------------------------
 
     private fun onSpeak() {
         val text = input.text.toString().trim()
         if (text.isEmpty()) return toast("Enter some text first")
-        val sid = currentSpeakerId()
         val speedValue = currentSpeed()
         busy = true
         status.text = "Speaking…"
         refreshControls()
         stop.isEnabled = true
         worker.execute {
-            val error = runCatching { speaker.speak(text, sid, speedValue) }.exceptionOrNull()
+            val error = runCatching { speaker.speak(text, 0, speedValue) }.exceptionOrNull()
             runOnUiThread {
                 busy = false
                 status.text = error?.let { "Speech failed: ${it.message}" } ?: "Ready."
@@ -488,14 +318,13 @@ class MainActivity : ComponentActivity() {
 
     private fun exportWav(uri: Uri) {
         val text = input.text.toString().trim()
-        val sid = currentSpeakerId()
         val speedValue = currentSpeed()
         busy = true
         status.text = "Saving WAV…"
         refreshControls()
         worker.execute {
             val error = runCatching {
-                contentResolver.openOutputStream(uri)?.use { speaker.writeWav(text, sid, speedValue, it) }
+                contentResolver.openOutputStream(uri)?.use { speaker.writeWav(text, 0, speedValue, it) }
                     ?: error("Could not open the file for writing")
             }.exceptionOrNull()
             runOnUiThread {

@@ -111,10 +111,9 @@ RVC is MIT, but check the license of each voice model you use; the Hungarian Pip
 
 ## Android app (text to speech only)
 
-`android/` contains a native Android app that runs Kokoro and the Hungarian Piper voices offline through [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx). It does text to speech only; the RVC voice changer is desktop-only because real-time voice conversion is too heavy for phones.
+`android/` contains a native Android app that speaks Hungarian offline with the Piper voices through [sherpa-onnx](https://github.com/k2-fsa/sherpa-onnx). It does text to speech only; the RVC voice changer is desktop-only because real-time voice conversion is too heavy for phones.
 
-- On first launch the app downloads the Kokoro model once (several hundred MB), then works offline.
-- The **Engine** choice switches to **Piper (Hungarian voices)**; choosing Hungarian as the language does this by default. Anna, Berta and Imre download on demand (about 65 MB each) after you accept their terms (research and personal use).
+- Anna, Berta and Imre download on demand (about 65 MB each) after you accept their terms (research and personal use), then everything works offline. The Kokoro model of older versions is deleted on the first start to free the space.
 - Pick a voice and speed, then **Speak**, or **Save WAV**. Sharing text to TTSLTS from another app also fills the text box.
 - Download `TTSLTS-android.apk` from the latest [release](../../releases) and allow installing from unknown sources. Release APKs are debug-signed, so installing a newer build over an older one may require uninstalling first.
 
