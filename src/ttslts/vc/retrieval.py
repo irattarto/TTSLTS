@@ -114,13 +114,16 @@ class RetrievalIndex:
             chosen = providers(True)
             if chosen == ["CPUExecutionProvider"]:
                 return None
-            model = _search_graph(self.vectors, min(NEIGHBOURS, len(self.vectors)))
-            session = ort.InferenceSession(
-                model.SerializeToString(), session_options(chosen), providers=chosen
-            )
+            from ttslts.onnx_util import GPU_LOCK, ResilientSession
+
+            graph = _search_graph(self.vectors, min(NEIGHBOURS, len(self.vectors)))
+            data, opts = graph.SerializeToString(), session_options(chosen)
+            with GPU_LOCK:  # created while no other thread uses the card
+                session = ort.InferenceSession(data, opts, providers=chosen)
             if session.get_providers()[0] == "CPUExecutionProvider":
                 return None
-            return session
+            # like the other GPU sessions: one run at a time, made anew if a newer one is freed
+            return ResilientSession("voice index search", opts, session, source=data)
         except Exception as exc:  # the numpy search always works
             log.warning("Searching the voice index on the CPU: %s", exc)
             return None
@@ -140,10 +143,7 @@ class RetrievalIndex:
         """Squared distances and ids of the ``k`` closest index frames of every frame."""
         if self._session is not None and k == min(NEIGHBOURS, len(self.vectors)):
             try:
-                from ttslts.onnx_util import GPU_LOCK
-
-                with GPU_LOCK:  # one GPU run at a time in the whole program
-                    near, ids = self._session.run(None, {"q": q})
+                near, ids = self._session.run(None, {"q": q})
                 return np.asarray(near, dtype=np.float32), np.asarray(ids)
             except Exception as exc:
                 log.warning("Voice index search failed on the GPU, using the CPU: %s", exc)

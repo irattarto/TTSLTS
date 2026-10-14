@@ -172,3 +172,32 @@ def test_gpu_runs_never_overlap():
     for t in threads:
         t.join()
     assert len(overlaps) == 20 and not any(overlaps)
+
+
+def test_session_broken_by_freeing_a_newer_one_is_made_anew(monkeypatch):
+    """DirectML breaks sessions made before a session that is freed (reproduced on the card):
+    such a session is made anew before it runs again; a newer survivor is left alone."""
+    import gc
+
+    import onnxruntime as ort
+
+    class Gpu(GpuSession):
+        def get_providers(self):
+            return ["DmlExecutionProvider", "CPUExecutionProvider"]
+
+    made = []
+
+    def remake(source, options=None, providers=None):
+        made.append(source)
+        return Gpu()
+
+    monkeypatch.setattr(ort, "InferenceSession", remake)
+    old = onnx_util.ResilientSession("old.onnx", None, Gpu())
+    newer = onnx_util.ResilientSession("newer.onnx", None, Gpu())
+    newest = onnx_util.ResilientSession("newest.onnx", None, Gpu())
+    del newer
+    gc.collect()
+    assert newest.run(None, {}) == ["gpu result"] and made == []  # made after: still fine
+    assert old.run(None, {}) == ["gpu result"] and made == ["old.onnx"]  # made anew first
+    old.run(None, {})
+    assert made == ["old.onnx"]  # only once
