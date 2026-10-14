@@ -115,8 +115,8 @@ def test_live_voice_changer_gets_its_own_model(monkeypatch):
     controller = Controller(Settings(rvc_model_path="v.onnx"), save=lambda s: None)
     built = []
 
-    def build(key):
-        built.append(key)
+    def build(key, live=False):
+        built.append(live)
         return type("Model", (), {"index_rate": 0, "protect": 0})()
 
     monkeypatch.setattr(controller, "_build_rvc", build)
@@ -125,6 +125,7 @@ def test_live_voice_changer_gets_its_own_model(monkeypatch):
     live = controller.live_rvc()
     assert live is not tts and len(built) == 2  # a GPU session is only fast for one input size
     assert controller.live_rvc() is not live  # every start gets a fresh one
+    assert built == [False, True, True]  # only the live one searches its index on the GPU
 
 
 def test_long_speech_is_converted_in_short_pieces(monkeypatch):
