@@ -140,3 +140,117 @@ def test_sola_keeps_the_block_length():
     )  # fmt: skip
     out = conv.process(np.full(conv.chunk_in, 0.1, dtype=np.float32))
     assert len(out) == conv.chunk_out
+
+
+def play(buf, pushes, pull_ms=10, sr=48000, seconds=8.0):
+    """Simulated real time: ``pushes`` is a list of (time_s, samples); the speaker pulls
+    ``pull_ms`` of sound at a steady rate. Returns what was played."""
+    out, step, t, k = [], sr * pull_ms // 1000, 0.0, 0
+    while t < seconds:
+        while k < len(pushes) and pushes[k][0] <= t:
+            buf.push(pushes[k][1])
+            k += 1
+        out.append(buf.pull(step))
+        t += pull_ms / 1000
+    return np.concatenate(out)
+
+
+def test_output_margin_absorbs_slower_chunks():
+    sr, chunk = 48000, 9600  # 200 ms chunks
+    rng = np.random.default_rng(0)
+    tone = (0.3 * np.sin(2 * np.pi * 227 * np.arange(sr * 9) / sr)).astype(np.float32)
+    pushes = [  # every chunk takes 60-100 ms to convert after its audio is in
+        (0.2 * (i + 1) + rng.uniform(0.06, 0.10), tone[i * chunk : (i + 1) * chunk])
+        for i in range(40)
+    ]
+    plain = OutputBuffer(max_samples=chunk * 4)
+    heard = play(plain, pushes)
+    start = np.flatnonzero(heard)[0]
+    assert plain.underruns >= 1  # played as soon as it arrives: the sound breaks off
+    assert np.abs(np.diff(heard[start:])).max() > 0.1  # with a click
+
+    buf = OutputBuffer(max_samples=chunk * 4, margin=sr * 40 // 1000, fade=240)
+    played = play(buf, pushes)
+    assert buf.underruns == 0
+    start = np.flatnonzero(played)[0]
+    assert np.abs(np.diff(played[start : start + 30 * chunk])).max() < 0.05  # no clicks
+
+
+def test_output_margin_grows_after_running_dry_and_fades():
+    sr, chunk = 48000, 9600
+    tone = (0.3 * np.sin(2 * np.pi * 227 * np.arange(sr * 9) / sr)).astype(np.float32)
+    late = {10: 0.12}  # one chunk that takes 120 ms longer than the others
+    pushes = [(0.2 * (i + 1) + 0.05 + late.get(i, 0.0), tone[i * chunk : (i + 1) * chunk])
+              for i in range(40)]  # fmt: skip
+    buf = OutputBuffer(
+        max_samples=chunk * 4, margin=960, margin_step=960, max_margin=chunk, fade=240
+    )
+    played = play(buf, pushes)
+    assert buf.underruns >= 1 and buf.margin > 960
+    assert np.abs(np.diff(played)).max() < 0.05  # it faded out and back in instead of a click
+
+
+def test_output_buffer_trims_a_creeping_delay():
+    chunk = 9600
+    pushes = [(0.2 * (i + 1) * 0.99, np.full(chunk, 0.1, dtype=np.float32)) for i in range(40)]
+    buf = OutputBuffer(max_samples=chunk * 4, margin=1920, fade=240, watch=10)
+    play(buf, pushes)  # the microphone's clock runs 1 % fast: 2 ms more every chunk
+    assert len(buf._data) < 1920 + chunk + 960
+
+
+def test_gate_keeps_a_quiet_word_ending_and_a_short_pause():
+    calls = []
+
+    def convert(x, keep, pos):
+        calls.append(pos)
+        return np.full(keep, 0.1, dtype=np.float32)
+
+    conv = StreamConverter(convert, 16000, 16000, 16000, chunk_ms=100, silence_db=-40)
+    loud = np.full(conv.chunk_in, 0.1, dtype=np.float32)
+    ending = np.zeros(conv.chunk_in, dtype=np.float32)
+    ending[:300] = 0.05  # a soft consonant in an otherwise silent block: the block is quiet
+    silent = np.zeros(conv.chunk_in, dtype=np.float32)
+    for block in (loud, ending, silent, silent, silent, silent):
+        conv.process(block)
+    # the soft ending is converted, then the gate holds 200 ms (2 blocks) and closes
+    assert len(calls) == 4
+
+
+def test_pacer_waits_about_as_long_as_most_conversions_take():
+    from ttslts.vc.realtime import Pacer
+
+    pacer = Pacer(max_s=0.18)
+    assert pacer.delay == 0.0
+    for t in [0.10] * 30 + [0.12]:
+        pacer.note(t)
+    assert 0.10 < pacer.delay < 0.13
+    for _ in range(50):
+        pacer.note(0.5)  # far too slow: never more than the limit
+    assert pacer.delay == 0.18
+
+
+def test_model_keeps_running_now_and_then_during_silence():
+    calls = []
+
+    def convert(x, keep, pos):
+        calls.append(pos)
+        return np.zeros(keep, dtype=np.float32)
+
+    conv = StreamConverter(convert, 16000, 16000, 16000, chunk_ms=200, silence_db=-40)
+    silent = np.zeros(conv.chunk_in, dtype=np.float32)
+    for _ in range(12):  # 2.4 s of silence
+        assert not conv.process(silent).any()
+    assert len(calls) == 3  # every 800 ms, so the graphics card does not slow down
+    assert not conv.converted
+
+
+def test_warm_up_runs_the_model_on_the_live_window_size():
+    sizes = []
+
+    def convert(x, keep, pos):
+        sizes.append(len(x))
+        return np.zeros(keep, dtype=np.float32)
+
+    conv = StreamConverter(convert, 16000, 48000, 16000)
+    assert conv.warm_up() >= 0.0
+    assert sizes == [conv.window_16k] * 3

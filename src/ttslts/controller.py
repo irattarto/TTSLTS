@@ -71,6 +71,10 @@ class Controller(QObject):
             self._save(self.settings)
         except OSError as exc:
             self.error.emit(f"Could not save settings: {exc}")
+        vc = self._vc
+        if vc is not None:  # these two also apply to a running voice changer
+            vc.model.index_rate = self.settings.rvc_index_rate
+            vc.model.protect = self.settings.rvc_protect
 
     # -- models ----------------------------------------------------------
     def gpu_allowed(self) -> bool:
@@ -120,11 +124,12 @@ class Controller(QObject):
         gpu = self.gpu_allowed() and (live or not self.vc_running)
         return (s.rvc_model_path, s.contentvec_path, s.rmvpe_path, gpu, s.rvc_sample_rate)
 
-    def _build_rvc(self, key: tuple):
+    def _build_rvc(self, key: tuple, live: bool = False):
         from ttslts.vc.rvc import load_rvc
 
         model = load_rvc(*key)
-        model.index = self._load_index(key[0])
+        # the live voice changer searches the index on the GPU too (always the same size there)
+        model.index = self._load_index(key[0], use_gpu=live and key[3])
         model.index_rate = self.settings.rvc_index_rate
         model.protect = self.settings.rvc_protect
         return model
@@ -152,10 +157,10 @@ class Controller(QObject):
         fresh model and stays fast (measured: 68 ms instead of 603 ms per chunk).
         """
         self.status.emit("Loading voice model for the voice changer…")
-        return self._build_rvc(self._rvc_key(live=True))
+        return self._build_rvc(self._rvc_key(live=True), live=True)
 
     @staticmethod
-    def _load_index(model_path: str):
+    def _load_index(model_path: str, use_gpu: bool = False):
         """The voice's retrieval index, made now from its training features if only those exist."""
         from ttslts.vc import retrieval
 
@@ -168,7 +173,7 @@ class Controller(QObject):
                 if not (in_voices and features.is_dir()):
                     return None  # a voice from elsewhere has no index
                 retrieval.build(features, path)
-            return retrieval.RetrievalIndex.load(path)
+            return retrieval.RetrievalIndex.load(path, use_gpu)
         except (OSError, ValueError) as exc:
             log.warning("Could not use the voice index %s: %s", path, exc)
             return None

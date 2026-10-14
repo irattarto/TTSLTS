@@ -83,3 +83,43 @@ def test_index_pulls_voiced_frames_to_the_voice_and_protect_spares_unvoiced_ones
 def test_settings_have_defaults():
     s = Settings()
     assert 0 < s.rvc_index_rate < 1 and 0 < s.rvc_protect < 0.5
+
+
+def test_search_graph_finds_the_same_neighbours_as_numpy():
+    """The graph the live voice changer runs on the GPU; checked here on the CPU."""
+    import onnxruntime as ort
+
+    rng = np.random.default_rng(3)
+    vectors = rng.standard_normal((300, 768)).astype(np.float32)
+    query = vectors[:21] + 0.3 * rng.standard_normal((21, 768)).astype(np.float32)
+    index = RetrievalIndex(vectors)
+    graph = retrieval._search_graph(vectors, retrieval.NEIGHBOURS)
+    index._session = ort.InferenceSession(
+        graph.SerializeToString(), providers=["CPUExecutionProvider"]
+    )
+    assert np.allclose(index.search(query), RetrievalIndex(vectors).search(query), atol=1e-4)
+
+
+def test_failing_gpu_search_falls_back_to_numpy():
+    class Broken:
+        def run(self, *args):
+            raise RuntimeError("device lost")
+
+    vectors = np.random.default_rng(4).standard_normal((50, 768)).astype(np.float32)
+    index = RetrievalIndex(vectors)
+    index._session = Broken()
+    assert np.allclose(index.search(vectors[:2]), vectors[:2], atol=1e-3)
+    assert not index.on_gpu
+
+
+def test_running_voice_changer_follows_index_settings():
+    from types import SimpleNamespace
+
+    from ttslts.controller import Controller
+
+    controller = Controller(Settings(), save=lambda s: None)
+    model = SimpleNamespace(index_rate=0.5, protect=0.33)
+    controller._vc = SimpleNamespace(model=model, running=True)
+    controller.settings.rvc_index_rate, controller.settings.rvc_protect = 0.2, 0.1
+    controller.save_settings()
+    assert (model.index_rate, model.protect) == (0.2, 0.1)
