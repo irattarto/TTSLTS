@@ -184,3 +184,22 @@ def test_idle_text_to_speech_model_is_dropped_after_a_while(monkeypatch):
     while controller._rvc is not None and time.time() < deadline:
         time.sleep(0.02)
     assert controller._rvc is None
+
+
+def test_tts_pieces_keep_their_length_and_get_context():
+    from ttslts.controller import RVC_TTS_PAD_S, convert_piece
+
+    seen = []
+
+    class Rvc:
+        sample_rate = 40000
+
+        def convert(self, audio, shift, sid):  # like RVC: a little shorter than the input
+            seen.append(len(audio))
+            return np.arange(round(len(audio) * 2.5) - 50, dtype=np.float32)
+
+    piece = np.random.default_rng(0).standard_normal(16000 * 3).astype(np.float32)
+    out = convert_piece(Rvc(), piece, 0.0, 0)
+    assert len(out) == 40000 * 3  # exactly as long as the piece, so long texts keep their timing
+    assert seen == [len(piece) + 2 * int(RVC_TTS_PAD_S * 16000)]
+    assert out[0] == round(RVC_TTS_PAD_S * 16000 * 2.5)  # the padding is cut off again

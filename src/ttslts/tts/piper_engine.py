@@ -18,7 +18,12 @@ from pathlib import Path
 import numpy as np
 
 BOS, EOS, PAD = "^", "$", "_"
-SENTENCE_PAUSE_S = 0.25
+SENTENCE_PAUSE_S = 0.25  # after a sentence that ends in a full stop
+# Longer pauses where a speaker pauses longer: after a question or an exclamation, after "…",
+# at a line break and most at a new paragraph (an empty line).
+PAUSE_AFTER = {"?": 0.35, "!": 0.35, "…": 0.5}
+LINE_PAUSE_S = 0.4
+PARAGRAPH_PAUSE_S = 0.7
 _SENTENCE_END = re.compile(r"(?<=[.!?…])\s+|\n+")
 _espeak_ready = False
 _espeak_lock = threading.Lock()
@@ -38,7 +43,28 @@ def _ensure_espeak() -> None:
 
 
 def split_sentences(text: str) -> list[str]:
-    return [s.strip() for s in _SENTENCE_END.split(text.strip()) if s and s.strip()]
+    return [s for s, _ in split_with_pauses(text)]
+
+
+def split_with_pauses(text: str) -> list[tuple[str, float]]:
+    """Sentences of ``text``, each with the pause (seconds) that follows it."""
+    text = text.strip().replace("...", "…")
+    out: list[tuple[str, float]] = []
+    start = 0
+    for match in [*_SENTENCE_END.finditer(text), None]:
+        end = match.start() if match else len(text)
+        sentence = text[start:end].strip()
+        if sentence:
+            gap = match.group() if match else ""
+            pause = PAUSE_AFTER.get(sentence[-1], SENTENCE_PAUSE_S)
+            if gap.count("\n") >= 2:
+                pause = max(pause, PARAGRAPH_PAUSE_S)
+            elif "\n" in gap:
+                pause = max(pause, LINE_PAUSE_S)
+            out.append((sentence, pause))
+        if match:
+            start = match.end()
+    return out
 
 
 class PiperVoice:
@@ -125,16 +151,17 @@ class PiperVoice:
             from ttslts.tts.hu_text import normalize_hungarian
 
             text = normalize_hungarian(text)
-        pause = np.zeros(int(SENTENCE_PAUSE_S * self.sample_rate), dtype=np.float32)
         parts: list[np.ndarray] = []
-        for sentence in split_sentences(text):
+        pause = 0.0
+        for sentence, pause_after in split_with_pauses(text):
             phonemes = self.phonemize(sentence)
             if not phonemes:
                 continue
             if parts:
-                parts.append(pause)
+                parts.append(np.zeros(int(pause * self.sample_rate), dtype=np.float32))
             ids = self.phoneme_ids(phonemes)
             parts.append(self._run(ids, speed, speaker_id, noise_scale, noise_w))
+            pause = pause_after
         if not parts:
             return np.zeros(0, dtype=np.float32), self.sample_rate
         audio = np.concatenate(parts)

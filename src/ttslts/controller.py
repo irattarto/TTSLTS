@@ -16,7 +16,7 @@ from PySide6.QtCore import QObject, Signal
 
 from ttslts import onnx_util, paths
 from ttslts.audio import devices
-from ttslts.audio.dsp import resample, split_at_quiet
+from ttslts.audio.dsp import fit_length, resample, split_at_quiet
 from ttslts.audio.wav import write_wav
 from ttslts.gpu_memory import GpuMemoryGate
 from ttslts.settings import Settings
@@ -27,6 +27,22 @@ log = logging.getLogger(__name__)
 # of the longest piece it has converted (0.8 GB loaded, 1.8 GB after 6 s, 3.9 GB after 15 s).
 RVC_TTS_PIECE_S = 6.0
 RVC_IDLE_RELEASE_S = 60.0  # the text-to-speech voice model leaves the GPU after this long unused
+RVC_TTS_PAD_S = 0.3  # mirrored speech around each piece, so its edges are converted with context
+
+
+def convert_piece(model, piece16k: np.ndarray, shift: float, speaker_id: int) -> np.ndarray:
+    """Convert one piece of speech with mirrored padding on both sides, as the original RVC
+    does, and cut it back to the piece's own length.
+
+    Without padding the model works right up to the edges, where it hears nothing before or
+    after, and returns about 20 ms less than it was given, so a long text came out shorter
+    with every piece.
+    """
+    pad = min(int(RVC_TTS_PAD_S * 16000), len(piece16k) - 1)
+    padded = np.pad(piece16k, (pad, pad), mode="reflect") if pad > 0 else piece16k
+    out = model.convert(padded, shift, speaker_id)
+    ratio = model.sample_rate / 16000
+    return fit_length(out[round(max(pad, 0) * ratio) :], round(len(piece16k) * ratio))
 
 
 class Controller(QObject):
@@ -452,7 +468,7 @@ class Controller(QObject):
             src = resample(audio, sr, 16000)
             shift = s.pitch_shift + (self._auto_pitch_shift(model, src) if s.tts_auto_pitch else 0)
             parts = [
-                model.convert(piece, shift, s.speaker_id)
+                convert_piece(model, piece, shift, s.speaker_id)
                 for piece in split_at_quiet(src, 16000, RVC_TTS_PIECE_S)
             ]
             audio, sr = np.concatenate(parts), model.sample_rate
