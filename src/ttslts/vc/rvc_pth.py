@@ -7,9 +7,9 @@ with relative-position attention, reversed flow, NSF-HiFiGAN decoder) is written
 an ONNX graph. The posterior encoder is only needed for training and is left out.
 
 The graph takes the inputs the voice changer already feeds (``phone``, ``phone_lengths``,
-``pitch``, ``nsff0``, ``sid``, ``rnd``) and returns ``audio`` ``(1, 1, samples)``. Batch size is
-one, so the padding mask is all ones and is not modelled. Verified against the original
-PyTorch code in CI (``tools/verify_rvc_pth.py``).
+``pitch``, ``nsff0``, ``sid``, ``rnd``, ``skip``, ``nsf_noise``) and returns ``audio``
+``(1, 1, samples)``. Batch size is one, so the padding mask is all ones and is not modelled.
+Verified against the original PyTorch code in CI (``tools/verify_rvc_pth.py``).
 """
 
 from __future__ import annotations
@@ -399,8 +399,10 @@ def build_model(state: dict, cfg: RvcConfig, noise: bool = True):
             op("Mul", [op("Sub", [f32(1.0), voiced_up]), f32(0.1 / 3)]),
         ],
     )
-    if noise:
-        rnd_src = op("RandomNormalLike", [wave])
+    if noise:  # (1, upp, frames) -> (1, 1, decoded frames * upp), one value per output sample
+        rnd_src = op("Slice", ["nsf_noise", "skip", i64([2**31 - 1]), i64([2])])
+        rnd_src = op("Transpose", [rnd_src], perm=[0, 2, 1])
+        rnd_src = op("Reshape", [rnd_src, i64([1, 1, -1])])
     else:
         rnd_src = op("Mul", [wave, f32(0.0)])
     wave = op("Add", [op("Mul", [wave, voiced_up]), op("Mul", [noise_amp, rnd_src])])
@@ -466,6 +468,8 @@ def build_model(state: dict, cfg: RvcConfig, noise: bool = True):
             helper.make_tensor_value_info("rnd", float_t, [1, ic, "frames"]),
             # frames dropped from the start before decoding (0 decodes everything)
             helper.make_tensor_value_info("skip", TensorProto.INT64, [1]),
+            # the decoder's noise source: standard normal, one value per output sample
+            *([helper.make_tensor_value_info("nsf_noise", float_t, [1, upp, "frames"])] * noise),
         ],
         [helper.make_tensor_value_info("audio", float_t, [1, 1, "samples"])],
         initializer=inits,
@@ -506,7 +510,7 @@ def ensure_onnx(pth_path: str, cache_dir: str | None = None) -> str:
         cache = models_dir() / "voices"
     else:
         cache = Path(cache_dir)
-    out = cache / f"{src.stem}-{digest[:10]}-v2.onnx"  # v2: graph with the skip input
+    out = cache / f"{src.stem}-{digest[:10]}-v3.onnx"  # v3: skip and nsf_noise inputs
     if out.exists():
         return str(out)
     cache.mkdir(parents=True, exist_ok=True)

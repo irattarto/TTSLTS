@@ -12,6 +12,7 @@ F0_MIN = 50.0
 F0_MAX = 1100.0
 _MEL_MIN = 1127.0 * np.log(1.0 + F0_MIN / 700.0)
 _MEL_MAX = 1127.0 * np.log(1.0 + F0_MAX / 700.0)
+HIGHPASS_HZ = 48.0  # rumble filter used on training audio and on the microphone
 
 
 def to_mono(x: np.ndarray) -> np.ndarray:
@@ -25,6 +26,21 @@ def resample(x: np.ndarray, sr_from: int, sr_to: int) -> np.ndarray:
         return x
     g = gcd(int(sr_from), int(sr_to))
     return resample_poly(x, sr_to // g, sr_from // g).astype(np.float32)
+
+
+def highpass_filter(sr: int, hz: float = HIGHPASS_HZ):
+    """A streaming high-pass filter: call it block after block, it keeps its own state."""
+    from scipy.signal import butter, sosfilt, sosfilt_zi
+
+    sos = butter(5, hz, btype="high", fs=sr, output="sos")
+    state = sosfilt_zi(sos) * 0.0
+
+    def run(block: np.ndarray) -> np.ndarray:
+        nonlocal state
+        out, state = sosfilt(sos, np.asarray(block, dtype=np.float64), zi=state)
+        return out.astype(np.float32)
+
+    return run
 
 
 def fit_length(x: np.ndarray, n: int) -> np.ndarray:
@@ -42,12 +58,50 @@ def rms_db(x: np.ndarray) -> float:
 
 
 def crossfade(prev_tail: np.ndarray, head: np.ndarray) -> np.ndarray:
-    """Equal-power crossfade from ``prev_tail`` into ``head`` (same length)."""
+    """Crossfade from ``prev_tail`` into ``head`` (same length) whose gains add up to one,
+    which keeps the level of two signals that are alike (equal-gain)."""
     n = len(head)
     if n == 0:
         return head
     t = np.linspace(0.0, np.pi / 2, n, dtype=np.float32)
     return prev_tail * np.cos(t) ** 2 + head * np.sin(t) ** 2
+
+
+CROSSFADE_BANDS_HZ = (1500.0, 4000.0)  # edges of the bands that band_crossfade treats apart
+
+
+def band_crossfade(prev_tail: np.ndarray, head: np.ndarray, sr: int) -> np.ndarray:
+    """Crossfade that keeps the level in every frequency band, however alike the two are.
+
+    An equal-gain crossfade is right for two versions of a sound that line up, but where they
+    are unrelated (the hiss of an "sz", the highest harmonics) it is 3 dB too quiet halfway
+    through. So the two are split into bands; in each band the gains are ``cos``/``sin``
+    divided by ``sqrt(1 + 2 rho cos sin)``, where ``rho`` is how alike the two are there:
+    equal-gain for ``rho = 1``, equal-power for ``rho = 0``. At both ends every band has the
+    same gain, so the split itself leaves no trace.
+    """
+    n = len(head)
+    if n < 8:
+        return crossfade(prev_tail, head)
+    a = np.asarray(prev_tail, dtype=np.float64)
+    b = np.asarray(head, dtype=np.float64)
+    fa, fb = np.fft.rfft(a), np.fft.rfft(b)
+    freqs = np.fft.rfftfreq(n, 1.0 / sr)
+    edges = [0.0, *CROSSFADE_BANDS_HZ, sr / 2 + 1]
+    t = np.linspace(0.0, np.pi / 2, n)
+    cos, sin = np.cos(t), np.sin(t)
+    out = np.zeros(n)
+    for lo, hi in zip(edges[:-1], edges[1:], strict=True):
+        mask = (freqs >= lo) & (freqs < hi)
+        if not mask.any():
+            continue
+        band_a = np.fft.irfft(np.where(mask, fa, 0), n)
+        band_b = np.fft.irfft(np.where(mask, fb, 0), n)
+        energy = np.sqrt(np.dot(band_a, band_a) * np.dot(band_b, band_b))
+        rho = float(np.clip(np.dot(band_a, band_b) / energy, 0.0, 1.0)) if energy > 1e-12 else 1.0
+        gain = 1.0 / np.sqrt(1.0 + 2.0 * rho * cos * sin)
+        out += (band_a * cos + band_b * sin) * gain
+    return out.astype(np.float32)
 
 
 def f0_to_coarse(f0: np.ndarray) -> np.ndarray:

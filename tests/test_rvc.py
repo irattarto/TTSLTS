@@ -61,3 +61,32 @@ def test_convert_output_length():
 def test_unknown_inputs_rejected():
     with pytest.raises(ValueError, match="Unrecognised"):
         model(["feats", "mystery"])
+
+
+def test_noise_is_the_same_for_the_same_moment():
+    """Two overlapping windows of a stream get the same noise where they overlap."""
+    m = model(WEBUI)
+    audio = np.zeros(16000, dtype=np.float32)
+    a = m.build_feed(audio, position=0)["rnd"]
+    b = m.build_feed(audio, position=3200)["rnd"]  # 200 ms (20 frames) later
+    assert np.array_equal(a[:, :, 20:], b[:, :, :-20])
+    assert not np.array_equal(a[:, :, :20], b[:, :, :20])
+
+
+def test_decoder_noise_is_fed_per_frame():
+    from fakes import FakeSession
+
+    session = FakeSession(
+        [(n, "tensor(int64)" if n in ("phone_lengths", "pitch", "sid", "skip") else
+          "tensor(float)", [1, 400, None] if n == "nsf_noise" else None)
+         for n in ["phone", "phone_lengths", "pitch", "nsff0", "sid", "rnd", "skip", "nsf_noise"]],
+        lambda feed: np.zeros((1, 1, feed["phone"].shape[1] * 400), dtype=np.float32),
+    )  # fmt: skip
+    m = RvcModel(session, ContentVec(fake_contentvec()))
+    audio = np.zeros(16000, dtype=np.float32)
+    a = m.build_feed(audio, position=0)["nsf_noise"]
+    b = m.build_feed(audio, position=1600)["nsf_noise"]  # 10 frames later
+    n = a.shape[2]
+    assert a.shape == (1, 400, n)
+    assert np.array_equal(a[:, :, 10:], b[:, :, : n - 10])
+    assert a.std() == pytest.approx(1.0, abs=0.05)

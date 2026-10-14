@@ -11,6 +11,10 @@ from ttslts import paths
 
 log = logging.getLogger(__name__)
 
+# Raised when a default changes in a way that should also reach settings saved earlier
+# (see ``_migrate``).
+SETTINGS_VERSION = 2
+
 
 @dataclass
 class Settings:
@@ -48,7 +52,7 @@ class Settings:
     rvc_protect: float = 0.33  # keeps consonants and breath clear when the index is used
     speaker_id: int = 0
     chunk_ms: int = 200
-    context_ms: int = 600
+    context_ms: int = 1500
     crossfade_ms: int = 40
     silence_threshold_db: float = -50.0
 
@@ -61,6 +65,8 @@ class Settings:
 
     # Runtime
     use_gpu: bool = True
+
+    settings_version: int = SETTINGS_VERSION
 
     @classmethod
     def load(cls, path: Path | None = None) -> Settings:
@@ -93,7 +99,18 @@ class Settings:
                 setattr(settings, f.name, value)
             else:
                 log.warning("Ignoring invalid value for %s: %r", f.name, value)
+        if "settings_version" not in raw:
+            settings.settings_version = 1
+        settings._migrate()
         return settings
+
+    def _migrate(self) -> None:
+        """Bring settings saved by an older version up to date."""
+        if self.settings_version < 2 and self.context_ms == 600:
+            # 600 ms was the old default; measured, 1500 ms converts clearly better at no extra
+            # delay, so the old default is moved on (a value chosen by hand stays)
+            self.context_ms = 1500
+        self.settings_version = SETTINGS_VERSION
 
     def save(self, path: Path | None = None) -> None:
         path = path or paths.settings_file()

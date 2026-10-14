@@ -43,3 +43,17 @@ def test_corrupt_file_gives_defaults(tmp_path):
     f = tmp_path / "s.json"
     f.write_text("{not json")
     assert Settings.load(f) == Settings()
+
+
+def test_old_default_context_moves_to_the_new_default(tmp_path):
+    f = tmp_path / "s.json"
+    f.write_text(json.dumps({"context_ms": 600}))  # saved before settings had a version
+    assert Settings.load(f).context_ms == 1500
+
+
+def test_context_chosen_by_hand_is_kept(tmp_path):
+    f = tmp_path / "s.json"
+    f.write_text(json.dumps({"context_ms": 800}))
+    assert Settings.load(f).context_ms == 800
+    f.write_text(json.dumps({"context_ms": 600, "settings_version": 2}))
+    assert Settings.load(f).context_ms == 600  # set by hand after the change

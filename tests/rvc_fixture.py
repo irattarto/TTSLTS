@@ -112,4 +112,11 @@ def feed(config=None, frames: int = 9, seed: int = 1) -> dict:
         "sid": np.array([1], dtype=np.int64),
         "skip": np.zeros(1, dtype=np.int64),
         "rnd": rng.standard_normal((1, config[2], frames)).astype(np.float32),
+        "nsf_noise": rng.standard_normal((1, int(np.prod(config[12])), frames)).astype(np.float32),
     }
+
+
+def for_session(session, inputs: dict) -> dict:
+    """Only the inputs that ``session`` takes (a build without noise has no ``nsf_noise``)."""
+    names = {i.name for i in session.get_inputs()}
+    return {k: v for k, v in inputs.items() if k in names}
