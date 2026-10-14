@@ -203,3 +203,61 @@ def test_tts_pieces_keep_their_length_and_get_context():
     assert len(out) == 40000 * 3  # exactly as long as the piece, so long texts keep their timing
     assert seen == [len(piece) + 2 * int(RVC_TTS_PAD_S * 16000)]
     assert out[0] == round(RVC_TTS_PAD_S * 16000 * 2.5)  # the padding is cut off again
+
+
+def test_stop_cancels_speech_that_is_still_being_made(monkeypatch):
+    import threading
+
+    from ttslts.audio import devices
+
+    started, release, played = threading.Event(), threading.Event(), []
+    controller = Controller(Settings(), save=lambda s: None)
+
+    def slow_render(text):
+        started.set()
+        release.wait(5)
+        return np.ones(100, dtype=np.float32), 22050
+
+    monkeypatch.setattr(controller, "render_tts", slow_render)
+    monkeypatch.setattr(devices, "play", lambda *a: played.append(a))
+    monkeypatch.setattr(devices, "stop", lambda: None)
+    monkeypatch.setattr(devices, "resolve", lambda *a: None)
+    done = threading.Event()
+    from PySide6.QtCore import Qt
+
+    # no event loop runs here, so take the signal straight from the speech thread
+    controller.ttsBusy.connect(
+        lambda busy: None if busy else done.set(), Qt.ConnectionType.DirectConnection
+    )
+    controller.speak("hosszú szöveg")
+    assert started.wait(5)
+    controller.stop_speaking()  # pressed while the speech is still being made
+    release.set()
+    assert done.wait(5)
+    assert played == []
+
+
+def test_speech_requests_take_turns(monkeypatch):
+    import time
+
+    from ttslts.audio import devices
+
+    active, overlaps, finished = [0], [], []
+    controller = Controller(Settings(), save=lambda s: None)
+
+    def render(text):
+        active[0] += 1
+        overlaps.append(active[0] > 1)
+        time.sleep(0.05)
+        active[0] -= 1
+        return np.ones(10, dtype=np.float32), 22050
+
+    monkeypatch.setattr(controller, "render_tts", render)
+    monkeypatch.setattr(devices, "play", lambda *a: finished.append(1))
+    monkeypatch.setattr(devices, "resolve", lambda *a: None)
+    for _ in range(3):
+        controller.speak("szia")
+    deadline = time.time() + 5
+    while len(finished) < 3 and time.time() < deadline:
+        time.sleep(0.02)
+    assert len(finished) == 3 and not any(overlaps)

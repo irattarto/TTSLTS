@@ -145,3 +145,30 @@ def test_a_failure_the_cpu_shares_is_not_blamed_on_the_gpu(monkeypatch):
         with pytest.raises(RuntimeError, match="invalid input"):
             session.run(None, {})
     assert onnx_util._skip_list() == [] and not session.on_cpu  # the input is at fault, not the GPU
+
+
+def test_gpu_runs_never_overlap():
+    """Two threads on DirectML at once crashed the program: runs take turns."""
+    import threading
+    import time
+
+    active, overlaps = [0], []
+
+    class Slow(GpuSession):
+        def run(self, outputs, feed):
+            active[0] += 1
+            overlaps.append(active[0] > 1)
+            time.sleep(0.01)
+            active[0] -= 1
+            return ["gpu result"]
+
+    a = onnx_util.ResilientSession("a.onnx", None, Slow())
+    b = onnx_util.ResilientSession("b.onnx", None, Slow())  # a different model counts too
+    threads = [
+        threading.Thread(target=lambda s=s: [s.run(None, {}) for _ in range(10)]) for s in (a, b)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+    assert len(overlaps) == 20 and not any(overlaps)
