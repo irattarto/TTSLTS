@@ -13,7 +13,7 @@ log = logging.getLogger(__name__)
 
 # Raised when a default changes in a way that should also reach settings saved earlier
 # (see ``_migrate``).
-SETTINGS_VERSION = 2
+SETTINGS_VERSION = 3
 
 
 @dataclass
@@ -43,7 +43,7 @@ class Settings:
     rmvpe_path: str = ""
     rvc_sample_rate: int = 40000
     pitch_shift: int = 0
-    rvc_index_rate: float = 0.5  # how much the voice's real features are mixed in
+    rvc_index_rate: float = 0.2  # how much the voice's real features are mixed in
     rvc_protect: float = 0.33  # keeps consonants and breath clear when the index is used
     speaker_id: int = 0
     chunk_ms: int = 200
@@ -105,6 +105,10 @@ class Settings:
             # 600 ms was the old default; measured, 1500 ms converts clearly better at no extra
             # delay, so the old default is moved on (a value chosen by hand stays)
             self.context_ms = 1500
+        if self.settings_version < 3 and self.rvc_index_rate == 0.5:
+            # 0.5 was the old default; measured, the index blurs Hungarian sounds (r/l, sz/s)
+            # and adds mistakes, so the old default moves to 0.2 (a value chosen by hand stays)
+            self.rvc_index_rate = 0.2
         self.settings_version = SETTINGS_VERSION
 
     def save(self, path: Path | None = None) -> None:
