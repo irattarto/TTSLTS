@@ -281,9 +281,10 @@ class MainWindow(QMainWindow):
         self.index_spin.valueChanged.connect(lambda v: self._set("rvc_index_rate", float(v)))
         self.index_spin.setToolTip(
             "How much the result leans on the real recordings of the voice (0 = not at all, "
-            "1 = fully). Higher sounds more like the real voice and clearer; too high can sound "
-            "rough or lose words. Needs a voice trained in TTSLTS (it has an index); applies to "
-            "the voice changer and to text to speech through the voice model."
+            "1 = fully). Higher sounds more like the real voice, but blurs sounds such as r/l "
+            "and sz/s (measured): 0-0.3 keeps the pronunciation clearest, default 0.2. Needs a "
+            "voice trained in TTSLTS (it has an index); applies to the voice changer and to text "
+            "to speech through the voice model."
         )
         form.addRow("Index rate", self.index_spin)
         self.protect_spin = QDoubleSpinBox(minimum=0.0, maximum=0.5, singleStep=0.01)

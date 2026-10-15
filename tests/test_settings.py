@@ -57,3 +57,13 @@ def test_context_chosen_by_hand_is_kept(tmp_path):
     assert Settings.load(f).context_ms == 800
     f.write_text(json.dumps({"context_ms": 600, "settings_version": 2}))
     assert Settings.load(f).context_ms == 600  # set by hand after the change
+
+
+def test_old_default_index_rate_moves_to_the_new_default(tmp_path):
+    f = tmp_path / "s.json"
+    f.write_text(json.dumps({"rvc_index_rate": 0.5, "settings_version": 2}))
+    assert Settings.load(f).rvc_index_rate == 0.2
+    f.write_text(json.dumps({"rvc_index_rate": 0.7, "settings_version": 2}))
+    assert Settings.load(f).rvc_index_rate == 0.7  # chosen by hand
+    f.write_text(json.dumps({"rvc_index_rate": 0.5, "settings_version": 3}))
+    assert Settings.load(f).rvc_index_rate == 0.5  # set by hand after the change
