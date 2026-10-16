@@ -80,6 +80,7 @@ def test_runner_events_reach_the_ui(tmp_path, monkeypatch):
 
 def test_models_stay_off_the_gpu_while_training(monkeypatch):
     controller = Controller(Settings(use_gpu=True), save=lambda s: None)
+    monkeypatch.setattr(controller._gpu_memory, "allowed", lambda: True)  # not this PC's card
     assert controller.gpu_allowed()
     controller._train_proc = type("P", (), {"poll": lambda self: None})()
     assert not controller.gpu_allowed()  # training is running
@@ -91,11 +92,8 @@ def test_models_stay_off_the_gpu_while_training(monkeypatch):
 def test_training_start_frees_loaded_models():
     controller = Controller(Settings(), save=lambda s: None)
     controller._piper, controller._piper_key = object(), ("a", True)
-    controller._rvc, controller._rvc_key_loaded = object(), ("c",)
     controller._release_gpu_models()
-    assert (
-        controller._piper is None and controller._rvc is None and controller._rvc_key_loaded is None
-    )
+    assert controller._piper is None and controller._piper_key is None
 
 
 def test_retry_gpu_clears_what_was_remembered(monkeypatch):
@@ -118,91 +116,9 @@ def test_live_voice_changer_gets_its_own_model(monkeypatch):
         return type("Model", (), {"index_rate": 0, "protect": 0})()
 
     monkeypatch.setattr(controller, "_build_rvc", build)
-    tts = controller.rvc()
-    assert controller.rvc() is tts and len(built) == 1  # text to speech reuses its model
     live = controller.live_rvc()
-    assert live is not tts and len(built) == 2  # a GPU session is only fast for one input size
-    assert controller.live_rvc() is not live  # every start gets a fresh one
-    assert built == [False, True, True]  # only the live one searches its index on the GPU
-
-
-def test_long_speech_is_converted_in_short_pieces(monkeypatch):
-    pieces = []
-
-    class Rvc:
-        sample_rate = 40000
-        pitch_fn = None
-
-        def convert(self, audio, shift, sid):
-            pieces.append(len(audio) / 16000)
-            return np.zeros(10, dtype=np.float32)
-
-    controller = Controller(
-        Settings(tts_through_rvc=True, tts_auto_pitch=False), save=lambda s: None
-    )
-    monkeypatch.setattr(controller, "rvc", lambda: Rvc())
-    monkeypatch.setattr(
-        controller,
-        "piper",
-        lambda: type(
-            "P", (), {"synthesize": lambda *a, **k: (np.ones(22050 * 40, "f") * 0.1, 22050)}
-        )(),
-    )
-    try:
-        controller.render_tts("a very long text")
-    finally:
-        controller.shutdown()
-    assert (
-        len(pieces) >= 6 and max(pieces) <= 8
-    )  # not one 15 s lump: that held 3.9 GB of video memory
-
-
-def test_text_to_speech_model_is_released_for_the_live_voice_changer(monkeypatch):
-    controller = Controller(Settings(rvc_model_path="v.onnx"), save=lambda s: None)
-    controller._rvc, controller._rvc_key_loaded = object(), ("k",)
-    controller._release_tts_rvc()
-    assert controller._rvc is None and controller._rvc_key_loaded is None
-
-
-def test_text_to_speech_stays_on_the_cpu_while_the_live_changer_runs(monkeypatch):
-    controller = Controller(Settings(use_gpu=True), save=lambda s: None)
-    monkeypatch.setattr(controller._gpu_memory, "allowed", lambda: True)
-    assert controller._rvc_key()[3] and controller._rvc_key(live=True)[3]
-    monkeypatch.setattr(Controller, "vc_running", property(lambda self: True))
-    assert not controller._rvc_key()[3]  # text to speech: CPU, so it cannot fill the card
-    assert controller._rvc_key(live=True)[3]  # the live model keeps the GPU
-
-
-def test_idle_text_to_speech_model_is_dropped_after_a_while(monkeypatch):
-    from ttslts import controller as controller_module
-
-    monkeypatch.setattr(controller_module, "RVC_IDLE_RELEASE_S", 0.05)
-    controller = Controller(Settings(), save=lambda s: None)
-    controller._rvc, controller._rvc_key_loaded = object(), ("k",)
-    controller._rvc_idle_timer()
-    deadline = time.time() + 5
-    while controller._rvc is not None and time.time() < deadline:
-        time.sleep(0.02)
-    assert controller._rvc is None
-
-
-def test_tts_pieces_keep_their_length_and_get_context():
-    from ttslts.controller import RVC_TTS_PAD_S, convert_piece
-
-    seen = []
-
-    class Rvc:
-        sample_rate = 40000
-
-        def convert(self, audio, shift, sid):  # like RVC: a little shorter than the input
-            seen.append(len(audio))
-            return np.arange(round(len(audio) * 2.5) - 50, dtype=np.float32)
-
-    piece = np.random.default_rng(0).standard_normal(16000 * 3).astype(np.float32)
-    out = convert_piece(Rvc(), piece, 0.0, 0)
-    assert len(out) == 40000 * 3  # exactly as long as the piece, so long texts keep their timing
-    assert seen == [len(piece) + 2 * int(RVC_TTS_PAD_S * 16000)]
-    assert out[0] == round(RVC_TTS_PAD_S * 16000 * 2.5)  # the padding is cut off again
+    assert controller.live_rvc() is not live  # every start gets a fresh one (one input size)
+    assert built == [True, True]  # and searches its index on the GPU
 
 
 def test_stop_cancels_speech_that_is_still_being_made(monkeypatch):

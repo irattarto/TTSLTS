@@ -30,9 +30,7 @@ class Settings:
 
     # Text to speech (Piper, Hungarian voices)
     tts_speed: float = 1.0
-    tts_through_rvc: bool = False
     pron_builtin: bool = True  # built-in list of abbreviations said with English letter names
-    tts_auto_pitch: bool = True  # shift speech to the voice model's own pitch range
     piper_voice: str = ""
     piper_variation: float = 0.667  # voice variation (Piper noise_scale)
     piper_rhythm: float = 0.8  # rhythm variation (Piper noise_w)

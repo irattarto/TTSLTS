@@ -258,13 +258,6 @@ def test_trained_voice_fixes_speaker_id_at_zero(make_window):
     assert w.speaker_spin.isEnabled()
 
 
-def test_auto_pitch_checkbox_is_on_and_saved(make_window):
-    w = make_window()
-    assert w.tts_auto_pitch_check.isChecked()
-    w.tts_auto_pitch_check.setChecked(False)
-    assert w.settings.tts_auto_pitch is False
-
-
 def test_latency_warns_when_processing_is_slower_than_the_chunk(make_window):
     w = make_window(chunk_ms=200)
     w.controller.vcLatency.emit(60.0)

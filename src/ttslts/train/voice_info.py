@@ -65,13 +65,3 @@ def load(model_path: str | Path) -> dict | None:
             return None
         return info
     return None
-
-
-def match_shift(source_f0: np.ndarray, target_median: float, limit: float = 24.0) -> float | None:
-    """Semitones that move speech with pitch track ``source_f0`` to ``target_median`` Hz."""
-    voiced = np.asarray(source_f0)
-    voiced = voiced[voiced > 0]
-    if len(voiced) < 20 or target_median <= 0:
-        return None
-    shift = 12.0 * float(np.log2(target_median / np.median(voiced)))
-    return float(np.clip(shift, -limit, limit))

@@ -20,3 +20,7 @@ android/app/build/
 android/build/
 android/local.properties
 android/app/src/main/jniLibs/
+
+# Local work files and finished extras (audio, training, measurements): never committed.
+/work/
+/final/
