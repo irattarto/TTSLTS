@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import pytest
 
@@ -265,3 +267,38 @@ def test_pause_after_a_question_is_longer():
     from ttslts.tts.piper_engine import PAUSE_AFTER
 
     assert len(audio) == 1000 + int(PAUSE_AFTER["?"] * sr) + 1000
+
+
+def _own_voice(folder, voice_id="hu_HU-galambos-medium"):
+    folder.mkdir(parents=True, exist_ok=True)
+    model = folder / f"{voice_id}.onnx"
+    model.write_bytes(b"onnx")
+    cfg = {"audio": {"sample_rate": 22050}, "phoneme_id_map": {"a": [1]}, "espeak": {"voice": "hu"}}
+    (folder / f"{voice_id}.onnx.json").write_text(json.dumps(cfg), encoding="utf-8")
+    return model
+
+
+def test_own_voice_is_added_listed_and_found(tmp_path):
+    src = _own_voice(tmp_path / "elsewhere")
+    base = tmp_path / "piper"
+    assert piper_download.add_voice(src, base) == "hu_HU-galambos-medium"
+    assert piper_download.installed_voices(base) == ["hu_HU-galambos-medium"]
+    model, config = piper_download.voice_paths("hu_HU-galambos-medium", base)
+    assert model.read_bytes() == b"onnx" and config.exists()
+    assert model.parent == piper_download.custom_dir(base)
+    assert piper_download.display_name("hu_HU-galambos-medium") == "galambos (own voice)"
+    assert "own" in piper_download.voice_note("hu_HU-galambos-medium")
+
+
+def test_adding_needs_the_settings_file_and_a_new_name(tmp_path):
+    src = _own_voice(tmp_path / "elsewhere")
+    (tmp_path / "elsewhere" / "hu_HU-galambos-medium.onnx.json").unlink()
+    with pytest.raises(piper_download.NotAPiperVoice, match="settings file is missing"):
+        piper_download.add_voice(src, tmp_path / "piper")
+    taken = _own_voice(tmp_path / "other", "hu_HU-imre-medium")
+    with pytest.raises(piper_download.NotAPiperVoice, match="downloaded voice"):
+        piper_download.add_voice(taken, tmp_path / "piper")
+    bad = _own_voice(tmp_path / "bad", "hu_HU-x-medium")
+    (tmp_path / "bad" / "hu_HU-x-medium.onnx.json").write_text("{}", encoding="utf-8")
+    with pytest.raises(piper_download.NotAPiperVoice, match="not a Piper voice settings"):
+        piper_download.add_voice(bad, tmp_path / "piper")

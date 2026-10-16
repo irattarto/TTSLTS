@@ -271,3 +271,27 @@ def test_latency_warns_when_processing_is_slower_than_the_chunk(make_window):
     assert w.latency_label.text() == "Processing: 60 ms per chunk"
     w.controller.vcLatency.emit(734.0)
     assert "too slow" in w.latency_label.text() and "200 ms" in w.latency_label.text()
+
+
+def test_add_voice_button_adds_and_selects_the_voice(make_window, monkeypatch, tmp_path):
+    from PySide6.QtWidgets import QFileDialog
+
+    from ttslts.tts import piper_download
+
+    folder = tmp_path / "voice"
+    folder.mkdir()
+    (folder / "hu_HU-galambos-medium.onnx").write_bytes(b"onnx")
+    (folder / "hu_HU-galambos-medium.onnx.json").write_text(
+        '{"audio": {"sample_rate": 22050}, "phoneme_id_map": {"a": [1]}}', encoding="utf-8"
+    )
+    w = make_window()
+    monkeypatch.setattr(
+        QFileDialog,
+        "getOpenFileName",
+        staticmethod(lambda *a, **k: (str(folder / "hu_HU-galambos-medium.onnx"), "")),
+    )
+    w.add_voice_btn.click()
+    assert "hu_HU-galambos-medium" in piper_download.installed_voices()
+    assert w.settings.piper_voice == "hu_HU-galambos-medium"
+    assert w.piper_combo.currentText() == "galambos (own voice)"
+    assert w.add_voice_btn.toolTip()

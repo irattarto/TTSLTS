@@ -6,6 +6,8 @@ pinned to a fixed revision and size-checked, to the user's own machine.
 
 from __future__ import annotations
 
+import json
+import shutil
 import urllib.request
 from collections.abc import Callable
 from pathlib import Path
@@ -90,22 +92,78 @@ do not use them for commercial products. The model cards are saved next to the f
 Download size: about 190 MB."""
 
 
+CUSTOM_NOTE = "your own Piper voice (added from a file). Hungarian text is read as Hungarian."
+
+
 def voices_dir() -> Path:
     return paths.models_dir() / "piper"
 
 
+def custom_dir(base: Path | None = None) -> Path:
+    """Voices of one's own (trained elsewhere or here): ``<id>.onnx`` + ``<id>.onnx.json``."""
+    return (base or voices_dir()) / "custom"
+
+
 def display_name(voice_id: str) -> str:
-    return VOICES[voice_id][1] if voice_id in VOICES else voice_id
+    if voice_id in VOICES:
+        return VOICES[voice_id][1]
+    # "hu_HU-galambos-medium" -> "galambos (own voice)"
+    parts = voice_id.split("-")
+    name = parts[1] if len(parts) >= 3 else voice_id
+    return f"{name} (own voice)"
+
+
+def voice_note(voice_id: str) -> str:
+    return VOICE_NOTES.get(voice_id, CUSTOM_NOTE)
 
 
 def voice_paths(voice_id: str, base: Path | None = None) -> tuple[Path, Path]:
-    base = base or voices_dir()
-    return base / f"{voice_id}.onnx", base / f"{voice_id}.onnx.json"
+    folder = (base or voices_dir()) if voice_id in VOICES else custom_dir(base)
+    return folder / f"{voice_id}.onnx", folder / f"{voice_id}.onnx.json"
+
+
+def custom_voices(base: Path | None = None) -> list[str]:
+    folder = custom_dir(base)
+    if not folder.is_dir():
+        return []
+    found = (p.name[: -len(".onnx")] for p in folder.glob("*.onnx"))
+    return sorted(v for v in found if v not in VOICES and voice_paths(v, base)[1].exists())
 
 
 def installed_voices(base: Path | None = None) -> list[str]:
-    """Ids of the voices whose model and config are both present."""
-    return [v for v in VOICES if all(p.exists() for p in voice_paths(v, base))]
+    """Ids of the voices whose model and config are both present: the downloaded Hungarian
+    voices first, then one's own."""
+    official = [v for v in VOICES if all(p.exists() for p in voice_paths(v, base))]
+    return official + custom_voices(base)
+
+
+class NotAPiperVoice(ValueError):
+    pass
+
+
+def add_voice(model: str | Path, base: Path | None = None) -> str:
+    """Copy a Piper voice (``x.onnx`` with its ``x.onnx.json`` next to it) into the own-voices
+    folder; returns its id."""
+    model = Path(model)
+    config = model.with_name(model.name + ".json")
+    if model.suffix.lower() != ".onnx" or not model.is_file():
+        raise NotAPiperVoice(f"{model.name} is not a Piper voice model (.onnx)")
+    if not config.is_file():
+        raise NotAPiperVoice(f"The voice's settings file is missing: {config.name}")
+    try:
+        cfg = json.loads(config.read_text(encoding="utf-8"))
+        if "sample_rate" not in cfg["audio"] or "phoneme_id_map" not in cfg:
+            raise KeyError("sample_rate or phoneme_id_map")
+    except (OSError, ValueError, KeyError, TypeError) as exc:
+        raise NotAPiperVoice(f"{config.name} is not a Piper voice settings file") from exc
+    voice_id = model.name[: -len(".onnx")]
+    if voice_id in VOICES:
+        raise NotAPiperVoice(f"{voice_id} is the name of a downloaded voice; rename the file")
+    target_model, target_config = voice_paths(voice_id, base)
+    target_model.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copyfile(model, target_model)
+    shutil.copyfile(config, target_config)
+    return voice_id
 
 
 def _url(folder: str, voice_id: str, suffix: str) -> str:

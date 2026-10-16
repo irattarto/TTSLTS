@@ -204,7 +204,16 @@ class MainWindow(QMainWindow):
             lambda i: self._set("piper_voice", self.piper_combo.itemData(i) or "")
         )
         self.piper_combo.setToolTip(HELP_VOICE)
-        form.addRow("Voice", self.piper_combo)
+        self.add_voice_btn = QPushButton("Add voice…")
+        self.add_voice_btn.setToolTip(
+            "Add a Piper voice of your own: choose its .onnx file; the .onnx.json settings file "
+            "with the same name must be next to it. The voice is copied into the app's folder."
+        )
+        self.add_voice_btn.clicked.connect(self._add_piper_voice)
+        voice_row = QHBoxLayout()
+        voice_row.addWidget(self.piper_combo, 1)
+        voice_row.addWidget(self.add_voice_btn)
+        form.addRow("Voice", voice_row)
         self.piper_hint = QLabel(HINT)
         self.piper_hint.setWordWrap(True)
         self.piper_hint.setStyleSheet("color: gray;")
@@ -733,8 +742,7 @@ class MainWindow(QMainWindow):
             self.piper_combo.addItem(piper_download.display_name(voice_id), voice_id)
             self.piper_combo.setItemData(
                 self.piper_combo.count() - 1,
-                f"{piper_download.display_name(voice_id)}: "
-                f"{piper_download.VOICE_NOTES.get(voice_id, '')}",
+                f"{piper_download.display_name(voice_id)}: {piper_download.voice_note(voice_id)}",
                 Qt.ItemDataRole.ToolTipRole,
             )
         if not installed:
@@ -744,6 +752,22 @@ class MainWindow(QMainWindow):
         self.piper_combo.setCurrentIndex(idx if idx >= 0 else 0)
         # keep the saved choice in step with what is actually installed
         self.settings.piper_voice = self.piper_combo.currentData() or ""
+
+    def _add_piper_voice(self) -> None:
+        from ttslts.tts import piper_download
+
+        path, _ = QFileDialog.getOpenFileName(self, "Add a Piper voice", "", "Piper voice (*.onnx)")
+        if not path:
+            return
+        try:
+            voice_id = piper_download.add_voice(path)
+        except (piper_download.NotAPiperVoice, OSError) as exc:
+            self._show_error(f"Could not add the voice: {exc}")
+            return
+        self.settings.piper_voice = voice_id
+        self._refresh_piper_voices()
+        self.controller.save_settings()
+        self.statusBar().showMessage(f"Voice added: {piper_download.display_name(voice_id)}")
 
     def _download_piper(self) -> None:
         from ttslts.tts import piper_download
