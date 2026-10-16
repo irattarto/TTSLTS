@@ -121,7 +121,7 @@ class Controller(QObject):
                 if s.piper_voice not in piper_download.installed_voices():
                     raise ValueError(
                         "No Hungarian voice is installed "
-                        "(Settings > Models > Download Hungarian voices)"
+                        "(Settings > Models > Download Hungarian voices, or Add voice)"
                     )
                 model, config = piper_download.voice_paths(s.piper_voice)
                 self.status.emit("Loading Hungarian voice…")
