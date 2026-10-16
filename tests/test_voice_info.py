@@ -1,11 +1,8 @@
 import json
 
 import numpy as np
-import pytest
 
 from ttslts import paths
-from ttslts.controller import Controller
-from ttslts.settings import Settings
 from ttslts.train import voice_info
 
 
@@ -39,57 +36,3 @@ def test_older_voices_are_worked_out_from_their_training_folder():
     folder.mkdir(parents=True)
     assert voice_info.load(folder / "old.onnx")["median_f0"] == 90.0
     assert (folder / "old.json").exists()  # remembered for next time
-
-
-def test_match_shift_is_in_semitones_and_limited():
-    assert voice_info.match_shift(np.full(50, 200.0), 100.0) == pytest.approx(-12.0)
-    assert voice_info.match_shift(np.full(50, 100.0), 100.0) == pytest.approx(0.0)
-    assert voice_info.match_shift(np.full(50, 800.0), 50.0) == -24.0
-    assert voice_info.match_shift(np.zeros(50), 100.0) is None  # no voiced speech
-    assert voice_info.match_shift(np.full(50, 100.0), 0.0) is None
-
-
-class FakeRvc:
-    sample_rate = 40000
-
-    def __init__(self):
-        self.shifts = []
-
-    def pitch_fn(self, audio16k):
-        return np.full(len(audio16k) // 160, 200.0, dtype=np.float32)
-
-    def convert(self, audio16k, shift, sid):
-        self.shifts.append(shift)
-        return audio16k
-
-
-def render(monkeypatch, tmp_path, **settings):
-    folder = paths.voices_dir() / "anna"
-    folder.mkdir(parents=True)
-    (folder / "anna.json").write_text(json.dumps({"median_f0": 100.0}))
-    controller = Controller(
-        Settings(
-            tts_through_rvc=True,
-            rvc_model_path=str(folder / "anna.onnx"),
-            pitch_shift=2,
-            **settings,
-        ),
-        save=lambda s: None,
-    )
-    fake = FakeRvc()
-    monkeypatch.setattr(controller, "rvc", lambda: fake)
-    monkeypatch.setattr(
-        controller,
-        "piper",
-        lambda: type("P", (), {"synthesize": lambda *a, **k: (np.ones(32000, "f"), 16000)})(),
-    )
-    controller.render_tts("hello")
-    return fake.shifts
-
-
-def test_text_to_speech_is_shifted_into_the_voices_range(monkeypatch, tmp_path):
-    assert render(monkeypatch, tmp_path) == [pytest.approx(-12.0 + 2)]  # 200 Hz -> 100 Hz, +manual
-
-
-def test_auto_pitch_can_be_switched_off(monkeypatch, tmp_path):
-    assert render(monkeypatch, tmp_path, tts_auto_pitch=False) == [2]

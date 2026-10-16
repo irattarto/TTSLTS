@@ -62,10 +62,6 @@ PERFORMANCE_HELP = {
 # Help for controls that are created without a tip of their own (see _apply_tooltips).
 TIPS = {
     "text_edit": "The text to read aloud.",
-    "tts_rvc_check": (
-        "Run the speech through your RVC voice model, so the text is read in your own custom "
-        "voice. Needs a Voice model and ContentVec (Settings > Models)."
-    ),
     "tts_device_combo": (
         "Where the speech is played. Choose a virtual cable to send speech into Discord, "
         "games or OBS."
@@ -84,8 +80,7 @@ TIPS = {
     ),
     "pitch_spin": (
         "Raises or lowers the voice in semitones (12 = one octave). It brings a voice into the "
-        "voice model's range, for example -12 for a female voice into a male voice. It applies "
-        "to the voice changer and to text to speech through the voice model."
+        "voice model's range, for example -12 for a female voice into a male voice."
     ),
     "vc_button": (
         "Start or stop changing your microphone voice in real time. Delay and quality are set "
@@ -108,8 +103,7 @@ TIPS = {
         "Stop after saving the voice made so far. Start the same name again to continue."
     ),
     "train_use_btn": (
-        "Select the voice that was just trained as the voice model for the voice changer and "
-        "for text to speech."
+        "Select the voice that was just trained as the voice model for the voice changer."
     ),
     "train_folder_btn": "Open the folder with the trained voice files (.pth and .onnx).",
     "train_bar": "Progress of the current step.",
@@ -236,22 +230,6 @@ class MainWindow(QMainWindow):
         self.speed_spin.setToolTip(HELP_SPEED)
         form.addRow("Speed", self.speed_spin)
 
-        form.addRow("Voice model", self._voice_combo())
-        self.tts_rvc_check = QCheckBox("Speak with my voice model (RVC)")
-        self.tts_rvc_check.setChecked(s.tts_through_rvc)
-        self.tts_rvc_check.toggled.connect(lambda v: self._set("tts_through_rvc", v))
-        form.addRow("", self.tts_rvc_check)
-        self.tts_auto_pitch_check = QCheckBox("Match the speech pitch to the voice automatically")
-        self.tts_auto_pitch_check.setChecked(s.tts_auto_pitch)
-        self.tts_auto_pitch_check.toggled.connect(lambda v: self._set("tts_auto_pitch", v))
-        self.tts_auto_pitch_check.setToolTip(
-            "A voice keeps the pitch of the speech it converts, so a high text to speech voice "
-            "becomes an unnatural, strained version of a deep voice. This shifts the speech to "
-            "the pitch range of the recordings the voice was trained on (voices trained in "
-            "TTSLTS only). The Pitch shift setting is added on top."
-        )
-        form.addRow("", self.tts_auto_pitch_check)
-
         self.tts_device_combo = self._device_combo("output", "tts_output_device")
         form.addRow("Play on", self.tts_device_combo)
         layout.addLayout(form)
@@ -292,8 +270,7 @@ class MainWindow(QMainWindow):
             "How much the result leans on the real recordings of the voice (0 = not at all, "
             "1 = fully). Higher sounds more like the real voice, but blurs sounds such as r/l "
             "and sz/s (measured): 0-0.3 keeps the pronunciation clearest, default 0.2. Needs a "
-            "voice trained in TTSLTS (it has an index); applies to the voice changer and to text "
-            "to speech through the voice model."
+            "voice trained in TTSLTS (it has an index)."
         )
         form.addRow("Index rate", self.index_spin)
         self.protect_spin = QDoubleSpinBox(minimum=0.0, maximum=0.5, singleStep=0.01)
@@ -577,7 +554,7 @@ class MainWindow(QMainWindow):
         """A picker for the voice model, by name: voices trained here plus the chosen file."""
         combo = QComboBox()
         combo.setToolTip(
-            "The voice used by the voice changer and by Speak with my voice model. Voices you "
+            "The voice used by the voice changer. Voices you "
             "train are listed by name; pick a file of your own in Settings > Models."
         )
         combo.activated.connect(lambda i, c=combo: self._on_voice_picked(c.itemData(i) or ""))
@@ -987,10 +964,7 @@ class MainWindow(QMainWindow):
             return
         self.rvc_model_edit.setText(self._train_result)
         self._set("rvc_model_path", self._train_result)
-        self.statusBar().showMessage(
-            "Voice selected: use it on the Voice Changer tab, or tick “Speak with my voice model” "
-            "on Text to Speech"
-        )
+        self.statusBar().showMessage("Voice selected: use it on the Voice Changer tab")
 
     def _train_open_folder(self) -> None:
 

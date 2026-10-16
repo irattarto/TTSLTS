@@ -79,11 +79,11 @@ def test_voice_changer_gets_the_gpu_after_speech_filled_the_card(monkeypatch):
         read=lambda: next(free), clock=lambda: 0.0, sleep=lambda s: None
     )
     assert not controller.gpu_allowed()  # what used to send the voice changer to the CPU
-    controller._piper, controller._rvc = object(), object()
+    controller._piper = object()
     controller._release_tts_models()
-    assert controller._piper is None and controller._rvc is None
+    assert controller._piper is None
     assert controller._live_gpu()
-    assert controller._rvc_key(live=True, gpu=True)[3]
+    assert controller._rvc_key(gpu=True)[3]
 
 
 def test_voice_changer_says_why_it_uses_the_cpu(monkeypatch):

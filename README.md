@@ -50,7 +50,7 @@ Settings are saved automatically to `%APPDATA%\TTSLTS\settings.json`.
 3. **Play on** picks the output device. Choose a virtual cable to send speech into Discord, games or OBS.
    **Add voice…** (next to the voice list) adds a Piper voice of your own: choose its `.onnx` file, with the `.onnx.json` settings file of the same name next to it. It is copied to `%APPDATA%\TTSLTS\models\piper\custom` and listed as *name (own voice)*.
    **Pronunciations…** (button on the Text to Speech tab, or select a word in the text and right-click it) lists words the voice says wrongly. Write each one the way it sounds in the language of the text, using that language's spelling: `Windows` -> `vindóz`, `Nvidia` -> `envídia`. Whole words only (`Windows-ban` works); *Match case* limits an entry to the exact capitalisation; **Listen** speaks the second column so you can check it. The file is `%APPDATA%\TTSLTS\pronunciations.json`. For Hungarian speech a built-in list also says FBI, CIA, USA, USB, DVD, PC, AI, IT and a few more the way Hungarians do, with English letter names (switch it off in the same window; an entry of your own wins).
-4. Tick **Speak with my voice model (RVC)** to run the speech through your RVC voice, giving TTS your custom voice.
+4. For speech in a voice of your own, use an own Piper voice (**Add voice…**). Running the speech through an RVC voice was removed: measured, it made more mistakes (10.7-12.5 % of the letters wrong for Whisper) than an own Piper voice trained on the same narrator (9.0 %).
 
 ### Voice changer
 
@@ -77,7 +77,7 @@ The **Train** tab makes an RVC v2 voice from recordings of one speaker, in the i
 2. On the **Train** tab add your recordings (mp3, wav, flac, ogg). Use clean speech of one person without music or noise; about 10 minutes gives a good voice and 2-3 minutes already works.
 3. Give the voice a name, pick the sample rate (40 kHz is the usual choice), epochs (100-300 for a few minutes of audio) and batch size (lower it if the GPU runs out of memory), then **Start training**. The first time you are asked to accept the terms and download the pretrained RVC v2 models (about 215 MB) that training starts from.
 4. Training cuts the recordings at pauses, extracts ContentVec features and pitch, and fine-tunes the pretrained model. The voice file is refreshed every *Save every* epochs, so you can try it before training ends. **Stop** saves and ends early; starting the same name again offers to continue where it stopped.
-5. The result is saved to `%APPDATA%\TTSLTS\voices\<name>\` as `<name>.pth` (the format voices are shared in, works in other RVC tools) and `<name>.onnx`, plus `<name>.index.npy` (the voice index) and `<name>.json` (the voice's natural pitch). **Use this voice** selects it for the voice changer and for *Speak with my voice model*.
+5. The result is saved to `%APPDATA%\TTSLTS\voices\<name>\` as `<name>.pth` (the format voices are shared in, works in other RVC tools) and `<name>.onnx`, plus `<name>.index.npy` (the voice index) and `<name>.json` (the voice's natural pitch). **Use this voice** selects it for the voice changer.
 
 Training runs in a separate process (`python -m ttslts.train.run`, from the app's bundled sources in the installed app); its log is `%APPDATA%\TTSLTS\train\<name>\train.log`. Only train on voices you have permission to use.
 
