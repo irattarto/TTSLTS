@@ -748,7 +748,10 @@ class MainWindow(QMainWindow):
             self.piper_combo.addItem("None installed (Settings > Models > Download)", "")
         self.piper_combo.blockSignals(False)
         idx = self.piper_combo.findData(self.settings.piper_voice)
-        self.piper_combo.setCurrentIndex(idx if idx >= 0 else 0)
+        if idx < 0:  # nothing chosen yet (or it is gone): an own F5 voice first, it sounds best
+            f5 = f5_voices.installed_voices()
+            idx = self.piper_combo.findData(f5[0]) if f5 else 0
+        self.piper_combo.setCurrentIndex(max(idx, 0))
         # keep the saved choice in step with what is actually installed
         self.settings.piper_voice = self.piper_combo.currentData() or ""
         self._apply_voice_kind()

@@ -299,3 +299,22 @@ def test_words_whisper_joins_differently_still_match():
     words = [(" Nos,", 0.0, 0.4), (" Oldsetter", 0.5, 1.0), (" hend", 1.0, 1.3)]
     cut, ok = f5_text.filler_cut(words, "old shatterhand a tűz mellett")
     assert ok and cut == pytest.approx(0.53)
+
+
+def test_an_own_f5_voice_is_chosen_when_none_is(qt_application, isolated_home, tmp_path):
+    from ttslts.tts import piper_download
+    from ttslts.ui.main_window import MainWindow
+
+    f5_voices.add_voice(make_voice_folder(tmp_path))  # into the test's app folder
+    piper = piper_download.voice_paths("hu_HU-imre-medium")
+    piper[0].parent.mkdir(parents=True, exist_ok=True)
+    for p in piper:
+        p.write_text("{}")
+    for saved, chosen in (("", "f5:galambos"), ("hu_HU-imre-medium", "hu_HU-imre-medium")):
+        w = MainWindow(Controller(Settings(piper_voice=saved), save=lambda s: None), False)
+        try:
+            assert w.settings.piper_voice == chosen  # a choice already made stays
+        finally:
+            w._quitting = True
+            w.close()
+            w.deleteLater()
