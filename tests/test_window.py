@@ -286,5 +286,5 @@ def test_add_voice_button_adds_and_selects_the_voice(make_window, monkeypatch, t
     w.add_voice_btn.click()
     assert "hu_HU-voice1-medium" in piper_download.installed_voices()
     assert w.settings.piper_voice == "hu_HU-voice1-medium"
-    assert w.piper_combo.currentText() == "voice1 (own voice)"
+    assert w.piper_combo.currentText() == "voice1 (own Piper voice)"
     assert w.add_voice_btn.toolTip()
