@@ -44,6 +44,11 @@ def reference_text(text: str, vocab: set[str]) -> str:
 
 
 def letters(word: str) -> str:
+    """The word's letters only; digits (Whisper writes "1848" for a spoken number) as words."""
+    if any(ch.isdigit() for ch in word):
+        from ttslts.tts.hu_numbers import spell_numbers
+
+        word = spell_numbers(word)
     return _LETTERS.sub("", word.lower())
 
 
@@ -55,67 +60,42 @@ def same_word(heard: str, expected: str, close: float = 0.75) -> bool:
     return a == b or difflib.SequenceMatcher(None, a, b).ratio() >= close
 
 
+def first_words(text: str, count: int = 2) -> list[str]:
+    return [w for w in text.split() if letters(w)][:count]
+
+
 def first_word(text: str) -> str:
-    for word in text.split():
-        if letters(word):
-            return word
-    return ""
+    words = first_words(text, 1)
+    return words[0] if words else ""
 
 
-def pause_cut(audio, sr: int, text_chars: int, filler_chars: int = len(FILLER)) -> float | None:
-    """Where the filler ends, from the sound alone: the pause after "nos," (its comma).
-
-    F5 gives every character about the same time, so the filler should end near
-    ``duration * filler_chars / text_chars``; the pause (40 ms or more, 30 dB under the speech)
-    closest to that point is taken, and the cut goes 20 ms before the next word starts.
-    Returns None when there is no such pause in the first 1.6 s.
-    """
-    import numpy as np
-
-    frame = int(0.01 * sr)
-    head = np.asarray(audio[: int(1.6 * sr)], dtype=np.float32)
-    n = len(head) // frame
-    if n < 10 or text_chars <= 0:
-        return None
-    level = 20 * np.log10(np.sqrt((head[: n * frame].reshape(n, frame) ** 2).mean(axis=1)) + 1e-9)
-    quiet = level < np.percentile(level, 95) - 30
-    voiced = np.flatnonzero(~quiet)
-    if not voiced.size:
-        return None
-    expected = len(audio) / sr * filler_chars / text_chars
-    best = None
-    i = voiced[0]
-    while i < n:
-        if not quiet[i]:
-            i += 1
-            continue
-        j = i
-        while j < n and quiet[j]:
-            j += 1
-        if j < n and j - i >= 4:  # a pause of 40 ms or more, with speech after it
-            end = j * 0.01
-            if best is None or abs(end - expected) < abs(best - expected):
-                best = end
-        i = j
-    if best is None or not (0.4 * expected <= best <= 2.5 * expected):
-        return None
-    return max(0.0, best - 0.02)
-
-
-def filler_cut(words: list[tuple[str, float, float]], expected_first: str) -> tuple[float, bool]:
-    """Where to cut the filler off a reading.
+def filler_cut(words: list[tuple[str, float, float]], text: str) -> tuple[float, bool]:
+    """Where to cut the filler off the reading of ``text``.
 
     ``words`` are (word, start s, end s) from speech recognition. Returns (cut time in seconds,
-    whether the reading starts well). The cut is just before the word that matches the text's
-    first word, looked for among the first three. Recognition sometimes hears the filler and the
-    first word as one ("nosvinetu"): then the cut goes where that word's last letters start. If
-    nothing matches, the cut is between the first two words.
+    whether the reading starts well). The cut is just after the start of the word that matches
+    the text's first word, looked for among the first three; a short first word ("a", "az") only
+    counts when the next word matches too, as another "a" comes soon. Recognition sometimes hears
+    the filler and the first word as one ("nosvinetu"): then the cut goes where that word's last
+    letters start. If nothing matches, the cut is between the first two words.
     """
     if not words:
         return 0.0, False
+    wanted = first_words(text)
+    if not wanted:
+        return 0.0, False
+    expected_first = wanted[0]
     expected = letters(expected_first)
+
+    def starts_here(i: int) -> bool:
+        if not same_word(words[i][0], expected_first):
+            return False
+        if len(expected) > 2 or len(wanted) < 2:
+            return True
+        return i + 1 < len(words) and same_word(words[i + 1][0], wanted[1])
+
     for i, (word, start, end) in enumerate(words[:3]):
-        if same_word(word, expected_first):
+        if starts_here(i):
             before = words[i - 1][2] if i else 0.0
             # 30 ms into it: Whisper puts a word's start early, and cutting right there left the
             # filler's "s" (heard as "és"); measured best of 0-200 ms, 120 ms cuts into words

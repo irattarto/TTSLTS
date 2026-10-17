@@ -184,3 +184,19 @@ def test_piper_settings_are_off_for_an_f5_voice(qt_application, tmp_path, monkey
         w._quitting = True
         w.close()
         w.deleteLater()
+
+
+def test_a_number_heard_as_digits_still_matches():
+    words = [(" Nos,", 0.0, 0.4), (" 1848", 0.5, 1.6), (" március", 1.6, 2.0)]
+    cut, ok = f5_text.filler_cut(words, "ezernyolcszáznegyvennyolc március")
+    assert ok and cut == pytest.approx(0.53)
+
+
+def test_a_short_first_word_needs_the_next_one_too():
+    # "a huszonegyedik": the first "a" Whisper hears is not the text's, the later one is
+    words = [(" Ánosz", 0.0, 0.5), (" a", 0.5, 0.6), (" kert", 0.6, 1.0), (" a", 1.0, 1.1)]
+    cut, ok = f5_text.filler_cut(words, "a huszonegyedik században")
+    assert not ok and cut < 0.6  # no false match far into the reading
+    words = [(" Nos,", 0.0, 0.4), (" a", 0.5, 0.6), (" huszonegyedik", 0.6, 1.4)]
+    cut, ok = f5_text.filler_cut(words, "a huszonegyedik században")
+    assert ok and cut == pytest.approx(0.53)
