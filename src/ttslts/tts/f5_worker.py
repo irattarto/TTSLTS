@@ -117,7 +117,14 @@ class Reader:
         from f5_tts.infer.utils_infer import infer_process
         from f5_tts.model.utils import seed_everything
 
-        from ttslts.tts.f5_text import FILLER, filler_cut, is_lively, melody_range, prepare_text
+        from ttslts.tts.f5_text import (
+            FILLER,
+            filler_cut,
+            is_lively,
+            keep_enough,
+            melody_range,
+            prepare_text,
+        )
 
         np = self.np
         text = prepare_text(msg["text"], self.vocab)
@@ -134,6 +141,9 @@ class Reader:
             wav = np.asarray(wav, dtype=np.float32)
             t1 = time.perf_counter()
             cut, ok = filler_cut(self.words(wav, sr), text)
+            safe = keep_enough(cut, len(wav) / sr, text)  # never the text itself cut away
+            ok = ok and safe == cut
+            cut = safe
             check = time.perf_counter() - t1
             wav = wav[int(cut * sr) :].copy()
             fade = min(len(wav), int(0.01 * sr))

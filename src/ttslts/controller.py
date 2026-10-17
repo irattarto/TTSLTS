@@ -22,6 +22,7 @@ from ttslts.settings import Settings
 
 log = logging.getLogger(__name__)
 
+F5_START_BUFFER_S = 6.0  # F5 speech plays once this much is made (or all of it)
 LIVE_GPU_NEED_MB = 1024  # free video memory the live voice changer needs (0.8 GB measured + room)
 
 
@@ -527,15 +528,30 @@ class Controller(QObject):
         voice = self.f5()
         prepared = pronunciation.apply_for(text, "hu", s.pron_builtin)
         stream = None
+        waiting: list[np.ndarray] = []  # made before playback starts
+
+        def start() -> None:
+            nonlocal stream
+            device = devices.resolve(s.tts_output_device, "output")
+            stream = devices.SpeechStream(voice.sample_rate, device)
+            for piece in waiting:
+                stream.add(piece)
+            self.status.emit("Speaking")
+
         try:
             for piece in voice.pieces(prepared, s.tts_speed, cancelled):
                 if cancelled():
                     break
-                if stream is None:
-                    device = devices.resolve(s.tts_output_device, "output")
-                    stream = devices.SpeechStream(voice.sample_rate, device)
-                    self.status.emit("Speaking")
-                stream.add(piece)
+                if stream is not None:
+                    stream.add(piece)
+                    continue
+                waiting.append(piece)
+                # a few seconds in hand first: a sentence read twice (flat or a bad start)
+                # takes about 8 s to make, and would otherwise leave a pause after the first
+                if sum(len(p) for p in waiting) >= F5_START_BUFFER_S * voice.sample_rate:
+                    start()
+            if stream is None and waiting and not cancelled():
+                start()  # a short text: all of it is made
         finally:
             if stream is not None:
                 stream.finish()
