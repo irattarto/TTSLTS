@@ -17,6 +17,7 @@ import re
 import unicodedata
 
 FILLER = "nos, "  # read before the text, then cut off
+CUT_AFTER_START_S = 0.03
 # characters that are not in the vocabulary but have a close one that is
 _SAME = {"”": '"', "“": '"', "«": '"', "’": "'", "‘": "'", "—": "–", "(": ",", ")": ","}
 _LETTERS = re.compile(r"[^a-záéíóöőúüű]")
@@ -116,7 +117,9 @@ def filler_cut(words: list[tuple[str, float, float]], expected_first: str) -> tu
     for i, (word, start, end) in enumerate(words[:3]):
         if same_word(word, expected_first):
             before = words[i - 1][2] if i else 0.0
-            return max(before, start - 0.03), True
+            # 30 ms into it: Whisper puts a word's start early, and cutting right there left the
+            # filler's "s" (heard as "és"); measured best of 0-200 ms, 120 ms cuts into words
+            return max(before, start + CUT_AFTER_START_S), True
         heard = letters(word)
         if i:
             continue
