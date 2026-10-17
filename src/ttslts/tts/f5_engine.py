@@ -100,14 +100,14 @@ class F5Voice:
         self, text: str, speed: float = 1.0, cancelled: Callable[[], bool] | None = None
     ) -> tuple[np.ndarray, int]:
         from ttslts.tts.hu_numbers import spell_numbers
-        from ttslts.tts.hu_text import normalize_hungarian
+        from ttslts.tts.hu_text import normalize_hungarian, spell_acronyms
         from ttslts.tts.piper_engine import split_with_pauses
 
         parts: list[np.ndarray] = []
         pause = 0.0
         # numbers as words: F5 reads characters and saw almost no digits in training; this runs
         # before the sentence split, so "1848. március 15." is not cut at its full stops
-        text = spell_numbers(normalize_hungarian(text))
+        text = spell_numbers(spell_acronyms(normalize_hungarian(text)))  # "SNS": es-en-es
         for n, (sentence, pause_after) in enumerate(split_with_pauses(text)):
             if cancelled and cancelled():
                 break
