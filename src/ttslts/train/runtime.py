@@ -88,10 +88,11 @@ def source_dir() -> Path:
     return Path(__file__).resolve().parents[2]  # .../src
 
 
-def _own_python_has_torch() -> bool:
+def _own_python_has(module: str = "torch") -> bool:
+    """Whether the app runs from a source checkout whose own Python already has ``module``."""
     import importlib.util
 
-    return not getattr(sys, "frozen", False) and importlib.util.find_spec("torch") is not None
+    return not getattr(sys, "frozen", False) and importlib.util.find_spec(module) is not None
 
 
 def _python_exe(root: Path | None = None) -> Path:
@@ -101,15 +102,15 @@ def _python_exe(root: Path | None = None) -> Path:
     return root / "venv" / "bin" / "python"
 
 
-def is_installed(root: Path | None = None) -> bool:
-    return _own_python_has_torch() or (
+def is_installed(root: Path | None = None, module: str = "torch") -> bool:
+    return _own_python_has(module) or (
         (root or runtime_dir()).joinpath("ready.json").exists() and _python_exe(root).exists()
     )
 
 
-def python_command(root: Path | None = None) -> list[str]:
+def python_command(root: Path | None = None, module: str = "torch") -> list[str]:
     """The interpreter that runs training jobs (and what it needs in its environment)."""
-    if _own_python_has_torch():
+    if _own_python_has(module):
         exe = Path(sys.executable)
         if exe.name.lower() == "pythonw.exe" and exe.with_name("python.exe").exists():
             exe = exe.with_name("python.exe")  # the job reports on stdout
@@ -117,10 +118,10 @@ def python_command(root: Path | None = None) -> list[str]:
     return [str(_python_exe(root))]
 
 
-def prepare_for_run(root: Path | None = None) -> dict[str, str]:
+def prepare_for_run(root: Path | None = None, module: str = "torch") -> dict[str, str]:
     """Make the interpreter find the app's sources; returns extra environment variables."""
     src = str(source_dir())
-    if _own_python_has_torch():
+    if _own_python_has(module):
         return {}  # a source install already has them
     pth = next((_python_exe(root).parent).glob("python*._pth"), None)
     if pth is not None:  # the embeddable Python ignores PYTHONPATH and reads this file instead
@@ -173,8 +174,12 @@ def install(
     status: Callable[[str], None] | None = None,
     root: Path | None = None,
     cuda: bool | None = None,
+    torch_packages: list[str] | None = None,
+    packages: list[str] | None = None,
+    check: str = CHECK,
 ) -> Path:
-    """Create the training environment; returns its Python interpreter."""
+    """Create the training environment (or, with other packages, another PyTorch environment
+    such as the F5 voices' one); returns its Python interpreter."""
     root = root or runtime_dir()
     say = status or (lambda _text: None)
     cuda = has_nvidia_gpu() if cuda is None else cuda
@@ -219,14 +224,15 @@ def install(
         "--disable-pip-version-check",
     ]
     say("Downloading PyTorch (this is the big one)…")
-    _run([*pip, "torch", "--index-url", TORCH_INDEX_CUDA if cuda else TORCH_INDEX_CPU], status)
+    index = TORCH_INDEX_CUDA if cuda else TORCH_INDEX_CPU
+    _run([*pip, *(torch_packages or ["torch"]), "--index-url", index], status)
     say("Installing the other packages…")
-    _run([*pip, *PACKAGES], status)
+    _run([*pip, *(packages or PACKAGES)], status)
 
     say("Checking the installation…")
     env = {"PYTHONPATH": str(source_dir())}
     check = subprocess.run(
-        [str(python), "-c", CHECK],
+        [str(python), "-c", check],
         capture_output=True,
         text=True,
         creationflags=_no_window(),

@@ -35,6 +35,7 @@ class Controller(QObject):
     piperDownloaded = Signal(list)
     pretrainedDownloaded = Signal(int)
     trainRuntimeInstalled = Signal()
+    f5RuntimeInstalled = Signal()
     trainRunning = Signal(bool)
     trainStage = Signal(str)
     trainProgress = Signal(dict)
@@ -48,6 +49,8 @@ class Controller(QObject):
         self._lock = threading.Lock()
         self._piper = None
         self._piper_key = None
+        self._f5 = None  # an F5-TTS voice: a process of its own (see tts.f5_engine)
+        self._f5_key = None
         self._vc = None
         self._train_proc: subprocess.Popen | None = None
         self._gpu_memory = GpuMemoryGate()
@@ -104,6 +107,41 @@ class Controller(QObject):
                 self._piper = PiperVoice.load(str(model), str(config), key[1])
                 self._piper_key = key
             return self._piper
+
+    def f5(self):
+        """The chosen F5-TTS voice, loaded in its own process (kept loaded between readings)."""
+        from ttslts.tts import f5_runtime, f5_voices
+        from ttslts.tts.f5_engine import F5Voice
+
+        s = self.settings
+        key = (s.piper_voice, self.gpu_allowed() and not self.vc_running)  # as for Piper
+        with self._lock:
+            if self._f5 is None or self._f5_key != key:
+                self._close_f5()
+                if not f5_runtime.is_installed():
+                    raise ValueError(
+                        "F5 voices need the F5 environment "
+                        "(Settings > Models > Set up F5-TTS voices)"
+                    )
+                if s.piper_voice not in f5_voices.installed_voices():
+                    raise ValueError(f"The F5 voice {s.piper_voice} is not installed")
+                self.status.emit("Loading the F5 voice (takes up to a minute)…")
+                self._f5 = F5Voice(
+                    f5_runtime.python_command(),
+                    f5_runtime.prepare_for_run(),
+                    f5_voices.voice_files(s.piper_voice),
+                    gpu=key[1],
+                )
+                self._f5_key = key
+                if key[1] and self._f5.device != "cuda":
+                    self.status.emit("The F5 voice runs on the CPU here, which is slow")
+            return self._f5
+
+    def _close_f5(self) -> None:
+        """End the F5 voice process (frees its video memory). Call with ``_lock`` held."""
+        f5, self._f5, self._f5_key = self._f5, None, None
+        if f5 is not None:
+            f5.close()
 
     def _rvc_key(self, gpu: bool | None = None) -> tuple:
         s = self.settings
@@ -241,6 +279,27 @@ class Controller(QObject):
 
         self._background(work, "install-train-runtime", once=True)
 
+    @staticmethod
+    def f5_runtime_ready() -> bool:
+        from ttslts.tts import f5_runtime
+
+        return f5_runtime.is_installed()
+
+    def install_f5_runtime(self) -> None:
+        """Set up the private F5-TTS environment. Call only after consent."""
+        from ttslts.tts import f5_runtime
+
+        def progress(name, done, total):
+            pct = f" {done * 100 // total}%" if total else ""
+            self.status.emit(f"Downloading {name}{pct}")
+
+        def work():
+            f5_runtime.install(progress, self.status.emit)
+            self.f5RuntimeInstalled.emit()
+            self.status.emit("F5-TTS environment ready")
+
+        self._background(work, "install-f5-runtime", once=True)
+
     @property
     def training(self) -> bool:
         return self._train_proc is not None and self._train_proc.poll() is None
@@ -322,9 +381,10 @@ class Controller(QObject):
         self.status.emit("The graphics card will be tried again for every model")
 
     def _release_tts_models(self) -> None:
-        """Drop the text-to-speech model (Piper) and the video memory it holds."""
+        """Drop the text-to-speech models (Piper, F5) and the video memory they hold."""
         with self._lock:
             self._piper, self._piper_key = None, None
+            self._close_f5()
 
     def _live_gpu(self) -> bool:
         """Whether the voice changer about to start may use the GPU.
@@ -352,8 +412,7 @@ class Controller(QObject):
         if self.vc_running or self._vc_starting:  # also one that is still starting
             self.stop_vc()
             self.status.emit("Voice changer stopped: the graphics card is needed for training")
-        with self._lock:
-            self._piper, self._piper_key = None, None
+        self._release_tts_models()
 
     def _read_training(self, proc: subprocess.Popen, log_file, work: Path) -> None:
         last_error = ""
@@ -410,11 +469,15 @@ class Controller(QObject):
         threading.Thread(target=force, daemon=True, name="train-stop").start()
 
     # -- text to speech --------------------------------------------------
-    def render_tts(self, text: str) -> tuple[np.ndarray, int]:
-        from ttslts.tts import pronunciation
+    def render_tts(
+        self, text: str, cancelled: Callable[[], bool] | None = None
+    ) -> tuple[np.ndarray, int]:
+        from ttslts.tts import f5_voices, pronunciation
 
         s = self.settings
         text = pronunciation.apply_for(text, "hu", s.pron_builtin)
+        if f5_voices.is_f5(s.piper_voice):
+            return self.f5().synthesize(text, s.tts_speed, cancelled)
         audio, sr = self.piper().synthesize(
             text, s.tts_speed, noise_scale=s.piper_variation, noise_w=s.piper_rhythm
         )
@@ -430,7 +493,9 @@ class Controller(QObject):
                     if generation != self._tts_generation:
                         return  # stopped before it started
                     self.status.emit("Synthesizing…")
-                    audio, sr = self.render_tts(text)
+                    audio, sr = self.render_tts(
+                        text, cancelled=lambda: generation != self._tts_generation
+                    )
                     if generation != self._tts_generation:
                         self.status.emit("Stopped")
                         return
@@ -550,3 +615,5 @@ class Controller(QObject):
             proc.terminate()  # the last periodic checkpoint is kept for resuming
         self.stop_vc()
         self.stop_speaking()
+        with self._lock:
+            self._close_f5()
