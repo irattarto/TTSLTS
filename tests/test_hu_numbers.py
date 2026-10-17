@@ -74,3 +74,19 @@ def test_text_without_numbers_is_unchanged():
     assert (
         spell_numbers("Szép szőke szirén, a sás susogott.") == "Szép szőke szirén, a sás susogott."
     )
+
+
+@pytest.mark.parametrize(
+    ("text", "said"),
+    [
+        ("Az SNS tagja.", "Az es-en-es tagja."),
+        ("A BKV-val és az OTP-nél.", "A bé-ká-vé-val és az o-té-pé-nél."),
+        ("NATO, MÁV, KRESZ, ELTE", "NATO, MÁV, KRESZ, ELTE"),  # said as words
+        ("EU, TV, AZ", "e-u, té-vé, AZ"),
+        ("Kovács Péter", "Kovács Péter"),
+    ],
+)
+def test_abbreviations_said_letter_by_letter(text, said):
+    from ttslts.tts.hu_text import spell_acronyms
+
+    assert spell_acronyms(text) == said
