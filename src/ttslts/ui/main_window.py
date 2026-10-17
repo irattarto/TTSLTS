@@ -194,14 +194,15 @@ class MainWindow(QMainWindow):
 
         form = QFormLayout()
         self.piper_combo = QComboBox()
-        self.piper_combo.currentIndexChanged.connect(
-            lambda i: self._set("piper_voice", self.piper_combo.itemData(i) or "")
-        )
+        self.piper_combo.currentIndexChanged.connect(self._on_voice_chosen)
         self.piper_combo.setToolTip(HELP_VOICE)
         self.add_voice_btn = QPushButton("Add voice…")
         self.add_voice_btn.setToolTip(
-            "Add a Piper voice of your own: choose its .onnx file; the .onnx.json settings file "
-            "with the same name must be next to it. The voice is copied into the app's folder."
+            "Add a voice of your own, copied into the app's folder.\n"
+            "Piper voice: choose its .onnx file; the .onnx.json settings file with the same "
+            "name must be next to it.\n"
+            "F5-TTS voice: choose its .safetensors file; vocab.txt, reference.wav (a calm voice "
+            "sample) and reference.txt (its exact text) must be next to it."
         )
         self.add_voice_btn.clicked.connect(self._add_piper_voice)
         voice_row = QHBoxLayout()
@@ -461,6 +462,14 @@ class MainWindow(QMainWindow):
         )
         piper_dl.clicked.connect(self._download_piper)
         ml.addRow("", piper_dl)
+        self.f5_setup_btn = QPushButton("Set up F5-TTS voices (PyTorch, ~4 GB)")
+        self.f5_setup_btn.setToolTip(
+            "F5-TTS voices sound smoother than Piper but need PyTorch: this sets up a private "
+            "environment for them in the app's data folder (asks first). Voices are added with "
+            "Add voice… on the Text to Speech tab."
+        )
+        self.f5_setup_btn.clicked.connect(self._setup_f5)
+        ml.addRow("", self.f5_setup_btn)
         rvc_dl = QPushButton("Download ContentVec + RMVPE (~550 MB)")
         rvc_dl.setToolTip("From the original RVC project; asks you to accept its terms first")
         rvc_dl.clicked.connect(self._download_rvc_base)
@@ -699,18 +708,23 @@ class MainWindow(QMainWindow):
                 return
             self._set("pron_builtin", dialog.use_builtin())
 
-    # -- Hungarian voices (Piper) ---------------------------------------
+    # -- Hungarian voices (Piper, F5-TTS) -------------------------------
     def _speak(self) -> None:
-        from ttslts.tts import piper_download
+        from ttslts.tts import f5_voices, piper_download
 
-        if not piper_download.installed_voices():  # nothing to speak with yet: offer them
+        voice = self.settings.piper_voice
+        if f5_voices.is_f5(voice):
+            if not self.controller.f5_runtime_ready():  # its environment first
+                self._setup_f5()
+                return
+        elif not piper_download.installed_voices():  # nothing to speak with yet: offer them
             self._download_piper()
             return
         self._on_tts_busy(True)  # at once, so a quick second click cannot start another
         self.controller.speak(self.text_edit.toPlainText())
 
     def _refresh_piper_voices(self) -> None:
-        from ttslts.tts import piper_download
+        from ttslts.tts import f5_voices, piper_download
 
         installed = piper_download.installed_voices()
         self.piper_combo.blockSignals(True)
@@ -722,6 +736,14 @@ class MainWindow(QMainWindow):
                 f"{piper_download.display_name(voice_id)}: {piper_download.voice_note(voice_id)}",
                 Qt.ItemDataRole.ToolTipRole,
             )
+        for voice_id in f5_voices.installed_voices():
+            installed.append(voice_id)
+            self.piper_combo.addItem(f5_voices.display_name(voice_id), voice_id)
+            self.piper_combo.setItemData(
+                self.piper_combo.count() - 1,
+                f"{f5_voices.display_name(voice_id)}: {f5_voices.NOTE}",
+                Qt.ItemDataRole.ToolTipRole,
+            )
         if not installed:
             self.piper_combo.addItem("None installed (Settings > Models > Download)", "")
         self.piper_combo.blockSignals(False)
@@ -729,22 +751,62 @@ class MainWindow(QMainWindow):
         self.piper_combo.setCurrentIndex(idx if idx >= 0 else 0)
         # keep the saved choice in step with what is actually installed
         self.settings.piper_voice = self.piper_combo.currentData() or ""
+        self._apply_voice_kind()
+
+    def _on_voice_chosen(self, index: int) -> None:
+        self._set("piper_voice", self.piper_combo.itemData(index) or "")
+        self._apply_voice_kind()
+
+    def _apply_voice_kind(self) -> None:
+        """Voice and rhythm variation are Piper settings; an F5 voice takes its manner from its
+        voice sample."""
+        from ttslts.tts import f5_voices
+
+        piper = not f5_voices.is_f5(self.settings.piper_voice)
+        for spin in (self.variation_spin, self.rhythm_spin):
+            spin.setEnabled(piper)
 
     def _add_piper_voice(self) -> None:
-        from ttslts.tts import piper_download
+        from ttslts.tts import f5_voices, piper_download
 
-        path, _ = QFileDialog.getOpenFileName(self, "Add a Piper voice", "", "Piper voice (*.onnx)")
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "Add a voice",
+            "",
+            "Voices (*.onnx *.safetensors);;Piper voice (*.onnx);;F5-TTS voice (*.safetensors)",
+        )
         if not path:
             return
+        f5 = path.lower().endswith(".safetensors")
         try:
-            voice_id = piper_download.add_voice(path)
-        except (piper_download.NotAPiperVoice, OSError) as exc:
+            voice_id = f5_voices.add_voice(path) if f5 else piper_download.add_voice(path)
+        except (piper_download.NotAPiperVoice, f5_voices.NotAnF5Voice, OSError) as exc:
             self._show_error(f"Could not add the voice: {exc}")
             return
         self.settings.piper_voice = voice_id
         self._refresh_piper_voices()
         self.controller.save_settings()
-        self.statusBar().showMessage(f"Voice added: {piper_download.display_name(voice_id)}")
+        name = f5_voices.display_name(voice_id) if f5 else piper_download.display_name(voice_id)
+        self.statusBar().showMessage(f"Voice added: {name}")
+        if f5 and not self.controller.f5_runtime_ready():
+            self._setup_f5()
+
+    def _setup_f5(self) -> None:
+        from ttslts.tts import f5_runtime
+
+        if self.controller.f5_runtime_ready():
+            self.statusBar().showMessage("The F5-TTS environment is already set up")
+            return
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Question)
+        box.setWindowTitle(f5_runtime.CONSENT_TITLE)
+        box.setText("Set up the environment for F5-TTS voices?")
+        box.setInformativeText(f5_runtime.consent_text())
+        accept = box.addButton("Set up", QMessageBox.ButtonRole.AcceptRole)
+        box.addButton(QMessageBox.StandardButton.Cancel)
+        box.exec()
+        if box.clickedButton() is accept:
+            self.controller.install_f5_runtime()
 
     def _download_piper(self) -> None:
         from ttslts.tts import piper_download

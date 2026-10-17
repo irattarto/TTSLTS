@@ -2,7 +2,7 @@
 
 An offline system tray app for Windows with two features:
 
-- **Hungarian text to speech** with the [Piper](https://github.com/rhasspy/piper) voices Anna, Berta and Imre.
+- **Hungarian text to speech** with the [Piper](https://github.com/rhasspy/piper) voices Anna, Berta and Imre, or with [F5-TTS](https://github.com/SWivid/F5-TTS) voices of your own.
 - **Real-time voice changing** with [RVC v2](https://github.com/RVC-Project/Retrieval-based-Voice-Conversion-WebUI) (MIT) voice models.
 - **Training your own voice** from mp3 or wav recordings, saved as an RVC v2 `.pth` and an `.onnx` file (PyTorch is set up on first use).
 
@@ -50,7 +50,17 @@ Settings are saved automatically to `%APPDATA%\TTSLTS\settings.json`.
 3. **Play on** picks the output device. Choose a virtual cable to send speech into Discord, games or OBS.
    **Add voice…** (next to the voice list) adds a Piper voice of your own: choose its `.onnx` file, with the `.onnx.json` settings file of the same name next to it. It is copied to `%APPDATA%\TTSLTS\models\piper\custom` and listed as *name (own voice)*.
    **Pronunciations…** (button on the Text to Speech tab, or select a word in the text and right-click it) lists words the voice says wrongly. Write each one the way it sounds in the language of the text, using that language's spelling: `Windows` -> `vindóz`, `Nvidia` -> `envídia`. Whole words only (`Windows-ban` works); *Match case* limits an entry to the exact capitalisation; **Listen** speaks the second column so you can check it. The file is `%APPDATA%\TTSLTS\pronunciations.json`. For Hungarian speech a built-in list also says FBI, CIA, USA, USB, DVD, PC, AI, IT and a few more the way Hungarians do, with English letter names (switch it off in the same window; an entry of your own wins).
-4. For speech in a voice of your own, use an own Piper voice (**Add voice…**). Running the speech through an RVC voice was removed: measured, it made more mistakes (10.7-12.5 % of the letters wrong for Whisper) than an own Piper voice trained on the same narrator (9.0 %).
+4. For speech in a voice of your own, use an own Piper voice or an own F5-TTS voice (**Add voice…**, see below). Running the speech through an RVC voice was removed: measured, it made more mistakes (10.7-12.5 % of the letters wrong for Whisper) than an own Piper voice trained on the same narrator (9.0 %).
+
+#### F5-TTS voices
+
+An F5-TTS voice reads more smoothly and clearly than Piper (measured on one narrator: 2.5 % of the letters wrong for Whisper against 6.8 %, and less pitch trembling), but it needs PyTorch and a graphics card, and takes a few seconds per sentence. No F5 voice is shipped or downloaded: you add your own (the Hungarian F5 base model, [Maxdorger29/f5-tts-hungarian](https://huggingface.co/Maxdorger29/f5-tts-hungarian), is CC BY-NC 4.0, non-commercial).
+
+1. Settings > Models > **Set up F5-TTS voices** (asks first): a private environment in `%APPDATA%\TTSLTS\runtime-f5` with Python, PyTorch, F5-TTS and faster-whisper, about 4 GB with an NVIDIA GPU. The first reading also fetches the Vocos vocoder and the Whisper *small* model from Hugging Face. Delete the folder to remove it.
+2. **Add voice…** and choose the voice's `.safetensors` file (F5TTS_v1_Base weights). Next to it must be `vocab.txt` (its vocabulary), `reference.wav` (a calm 5-15 s sample of the voice) and `reference.txt` (the sample's exact text). It is copied to `%APPDATA%\TTSLTS\models\f5\<folder name>` and listed as *name (own F5 voice)*.
+3. Speak as usual; Voice and Rhythm variation are Piper settings and are off for F5 voices (an F5 voice takes its manner from its sample). The voice is loaded in its own process the first time (up to a minute) and stays loaded; it moves off the graphics card while the voice changer runs (it is then slow) and is closed when the voice changer or training starts. Its log is `%APPDATA%\TTSLTS\f5.log`.
+
+Two things are done for the Hungarian F5 model: the text is lowercased (its vocabulary has no capitals, a capital is read as a space), and every sentence starts with the filler word "nos," that is cut off again where Whisper hears the first real word. Without it F5 often puts a stray sound in front ("Ugalambos"); a sentence whose start still comes out wrong is read once more.
 
 ### Voice changer
 
@@ -97,7 +107,8 @@ src/ttslts/
   controller.py     background work for TTS, voice changer, downloads
   settings.py       JSON settings (tray options default on)
   audio/            DSP helpers (resampling, YIN pitch, crossfade), devices, WAV
-  tts/              Piper engine, Hungarian voices download, text clean-up, pronunciations
+  tts/              Piper engine, Hungarian voices download, text clean-up, pronunciations;
+                    F5-TTS voices (f5_engine.py drives f5_worker.py in the F5 environment)
   vc/rvc.py         RVC v2 ONNX inference (ContentVec + pitch + voice model)
   vc/rvc_pth.py     .pth voice checkpoint -> ONNX importer (no PyTorch needed)
   vc/realtime.py    chunked streaming conversion with crossfades
@@ -108,7 +119,7 @@ src/ttslts/
 
 ## Licenses and consent
 
-RVC is MIT, but check the license of each voice model you use; the Hungarian Piper voices are for research and personal use (see above). The pretrained models used for training carry the RVC author's research-use clause (shown when you download them), and `train/rvc_model/` is RVC's MIT-licensed model code. Only clone voices you have permission to use.
+RVC is MIT, but check the license of each voice model you use; the Hungarian Piper voices are for research and personal use (see above), and F5 voices made from the Hungarian F5 model are non-commercial (CC BY-NC 4.0). The pretrained models used for training carry the RVC author's research-use clause (shown when you download them), and `train/rvc_model/` is RVC's MIT-licensed model code. Only clone voices you have permission to use.
 
 ## Android app (text to speech only)
 

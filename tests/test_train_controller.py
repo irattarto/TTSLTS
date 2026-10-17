@@ -129,7 +129,7 @@ def test_stop_cancels_speech_that_is_still_being_made(monkeypatch):
     started, release, played = threading.Event(), threading.Event(), []
     controller = Controller(Settings(), save=lambda s: None)
 
-    def slow_render(text):
+    def slow_render(text, **kw):
         started.set()
         release.wait(5)
         return np.ones(100, dtype=np.float32), 22050
@@ -161,7 +161,7 @@ def test_speech_requests_take_turns(monkeypatch):
     active, overlaps, finished = [0], [], []
     controller = Controller(Settings(), save=lambda s: None)
 
-    def render(text):
+    def render(text, **kw):
         active[0] += 1
         overlaps.append(active[0] > 1)
         time.sleep(0.05)
