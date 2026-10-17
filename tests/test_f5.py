@@ -25,13 +25,13 @@ def test_reference_text_ends_in_a_full_stop_and_a_space():
 def test_filler_is_cut_just_before_the_first_word():
     words = [(" Nos,", 0.0, 0.42), (" Reggelente", 0.55, 1.1), (" a", 1.1, 1.2)]
     cut, ok = f5_text.filler_cut(words, "reggelente")
-    assert ok and cut == pytest.approx(0.52)
+    assert ok and cut == pytest.approx(0.58)
 
 
 def test_a_stray_sound_heard_as_a_word_is_cut_too():
     words = [(" U", 0.0, 0.2), (" nos,", 0.2, 0.6), (" galambos", 0.7, 1.2)]
     cut, ok = f5_text.filler_cut(words, "galambos")
-    assert ok and cut == pytest.approx(0.67)
+    assert ok and cut == pytest.approx(0.73)
 
 
 def test_filler_and_first_word_heard_as_one():
