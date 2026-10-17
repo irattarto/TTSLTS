@@ -14,7 +14,7 @@ import subprocess
 import sys
 import tempfile
 import threading
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from pathlib import Path
 
 import numpy as np
@@ -87,44 +87,56 @@ class F5Voice:
         except OSError as exc:
             raise F5Error(f"The F5 voice process does not answer: {exc}") from exc
 
-    def say(self, sentence: str, speed: float = 1.0, seed: int = 0) -> np.ndarray:
+    def say(self, sentence: str, speed: float = 1.0, seed: int = 0, nfe: int = 32) -> np.ndarray:
         out = self._tmp / f"s{seed}.npy"
         with self._lock:
-            reply = self._ask(op="say", text=sentence, speed=speed, seed=seed, out=str(out))
+            reply = self._ask(
+                op="say", text=sentence, speed=speed, seed=seed, nfe=nfe, out=str(out)
+            )
         audio = np.load(reply["out"])
         out.unlink(missing_ok=True)
         self.sample_rate = int(reply["sr"])
         return np.asarray(audio, dtype=np.float32).reshape(-1)
 
-    def synthesize(
+    def pieces(
         self, text: str, speed: float = 1.0, cancelled: Callable[[], bool] | None = None
-    ) -> tuple[np.ndarray, int]:
+    ) -> Iterator[np.ndarray]:
+        """The reading of ``text`` sentence by sentence, each with the pause before it, so
+        playback can start with the first sentence while the next ones are being made."""
         from ttslts.tts.hu_numbers import spell_numbers
         from ttslts.tts.hu_text import normalize_hungarian, spell_acronyms
         from ttslts.tts.piper_engine import split_with_pauses
 
-        parts: list[np.ndarray] = []
-        pause = 0.0
         # numbers as words: F5 reads characters and saw almost no digits in training; this runs
         # before the sentence split, so "1848. március 15." is not cut at its full stops
         text = spell_numbers(spell_acronyms(normalize_hungarian(text)))  # "SNS": es-en-es
+        gain = None
+        pause = None
         for n, (sentence, pause_after) in enumerate(split_with_pauses(text)):
             if cancelled and cancelled():
-                break
+                return
             audio = self.say(sentence, speed, seed=n)
             if not audio.size:
                 continue
-            if parts:
-                parts.append(np.zeros(int(pause * self.sample_rate), dtype=np.float32))
-            parts.append(audio)
+            peak = float(np.abs(audio).max())
+            if gain is None:  # one loudness for the whole reading: set by its first sentence
+                gain = 0.9 / peak if peak > 0 else 1.0
+            audio = audio * gain
+            peak = float(np.abs(audio).max())
+            if peak > 0.98:  # a louder sentence later on is only kept from clipping
+                audio = audio * (0.98 / peak)
+            if pause is not None:
+                audio = np.concatenate([np.zeros(int(pause * self.sample_rate), np.float32), audio])
+            yield audio.astype(np.float32)
             pause = pause_after
+
+    def synthesize(
+        self, text: str, speed: float = 1.0, cancelled: Callable[[], bool] | None = None
+    ) -> tuple[np.ndarray, int]:
+        parts = list(self.pieces(text, speed, cancelled))
         if not parts:
             return np.zeros(0, dtype=np.float32), self.sample_rate
-        audio = np.concatenate(parts)
-        peak = float(np.abs(audio).max())
-        if peak > 0:
-            audio = audio * (0.9 / peak)
-        return audio.astype(np.float32), self.sample_rate
+        return np.concatenate(parts), self.sample_rate
 
     def close(self) -> None:
         proc = self._proc
