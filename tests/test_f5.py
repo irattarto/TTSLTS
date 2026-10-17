@@ -383,3 +383,10 @@ def test_short_f5_speech_plays_when_all_is_made(monkeypatch):
     controller.speak("Igen.")
     assert done.wait(5)
     assert played == ["open", 24000, "finish"]
+
+
+def test_leading_silence_before_a_word():
+    sr = 1000
+    audio = np.concatenate([np.zeros(300), np.ones(200)]).astype(np.float32)
+    assert f5_text.leading_silence(audio, sr) == pytest.approx(0.25)
+    assert f5_text.leading_silence(np.ones(100, np.float32), sr) == 0.0
