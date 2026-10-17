@@ -286,5 +286,5 @@ def test_add_voice_button_adds_and_selects_the_voice(make_window, monkeypatch, t
     w.add_voice_btn.click()
     assert "hu_HU-galambos-medium" in piper_download.installed_voices()
     assert w.settings.piper_voice == "hu_HU-galambos-medium"
-    assert w.piper_combo.currentText() == "galambos (own voice)"
+    assert w.piper_combo.currentText() == "galambos (own Piper voice)"
     assert w.add_voice_btn.toolTip()

@@ -390,3 +390,13 @@ def test_leading_silence_before_a_word():
     audio = np.concatenate([np.zeros(300), np.ones(200)]).astype(np.float32)
     assert f5_text.leading_silence(audio, sr) == pytest.approx(0.25)
     assert f5_text.leading_silence(np.ones(100, np.float32), sr) == 0.0
+
+
+def test_f5_speed_is_capped_and_the_rest_shortens_pauses(fake_voice, monkeypatch):
+    asked = []
+    real = fake_voice.say
+    monkeypatch.setattr(fake_voice, "say", lambda t, speed, seed: (asked.append(speed), real(t))[1])
+    long = "Ez a mondat elég hosszú ahhoz, hogy külön olvassa fel."
+    audio, sr = fake_voice.synthesize(f"{long} {long}", speed=1.25)
+    assert asked == [1.1, 1.1]  # F5 itself never reads faster than this
+    assert len(audio) == 100 + int(0.25 / 1.25 * sr) + 100

@@ -286,7 +286,7 @@ def test_own_voice_is_added_listed_and_found(tmp_path):
     model, config = piper_download.voice_paths("hu_HU-galambos-medium", base)
     assert model.read_bytes() == b"onnx" and config.exists()
     assert model.parent == piper_download.custom_dir(base)
-    assert piper_download.display_name("hu_HU-galambos-medium") == "galambos (own voice)"
+    assert piper_download.display_name("hu_HU-galambos-medium") == "galambos (own Piper voice)"
     assert "own" in piper_download.voice_note("hu_HU-galambos-medium")
 
 

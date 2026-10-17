@@ -69,7 +69,11 @@ HELP_RHYTHM = (
     "How much the timing of syllables varies.\nLower: even, metronome-like.\n"
     "Higher: livelier, but can sound uneven.\nDefault 0.80."
 )
-HELP_SPEED = "Speaking speed. 1.0 is normal. Slightly slower (0.9) can help with clarity."
+HELP_SPEED = (
+    "Speaking speed. 1.0 is normal. Slightly slower (0.9) can help with clarity.\n"
+    "F5 voices read at most at 1.1: faster, they drop short words; above that only the pauses "
+    "between sentences get shorter."
+)
 HINT = (
     "Tip: try all three voices first. If it sounds flat, raise Voice variation a little; if it "
     "sounds shaky, lower it. Hover any setting for details."
@@ -105,12 +109,13 @@ def custom_dir(base: Path | None = None) -> Path:
 
 
 def display_name(voice_id: str) -> str:
+    """The name in the voice list, with the engine: "Imre (Piper)", "galambos (own Piper voice)"."""
     if voice_id in VOICES:
-        return VOICES[voice_id][1]
-    # "hu_HU-galambos-medium" -> "galambos (own voice)"
+        return f"{VOICES[voice_id][1]} (Piper)"
+    # "hu_HU-galambos-medium" -> "galambos (own Piper voice)"
     parts = voice_id.split("-")
     name = parts[1] if len(parts) >= 3 else voice_id
-    return f"{name} (own voice)"
+    return f"{name} (own Piper voice)"
 
 
 def voice_note(voice_id: str) -> str:

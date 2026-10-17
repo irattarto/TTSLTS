@@ -24,6 +24,12 @@ from ttslts import paths
 log = logging.getLogger(__name__)
 
 
+# F5 reads faster by giving the text less time, and then drops short unstressed words: at 1.2
+# "mert" went missing (measured: 1 of 8 lost at 1.2, none at 1.1). Speed above this is made by
+# shortening the pauses between sentences instead.
+F5_MAX_SPEED = 1.1
+
+
 class F5Error(RuntimeError):
     pass
 
@@ -117,7 +123,7 @@ class F5Voice:
         for n, (sentence, pause_after) in enumerate(chunks):
             if cancelled and cancelled():
                 return
-            audio = self.say(sentence, speed, seed=n)
+            audio = self.say(sentence, min(speed, F5_MAX_SPEED), seed=n)
             if not audio.size:
                 continue
             peak = float(np.abs(audio).max())
@@ -128,7 +134,8 @@ class F5Voice:
             if peak > 0.98:  # a louder sentence later on is only kept from clipping
                 audio = audio * (0.98 / peak)
             if pause is not None:
-                audio = np.concatenate([np.zeros(int(pause * self.sample_rate), np.float32), audio])
+                gap = int(pause / max(speed, 0.1) * self.sample_rate)  # faster: shorter pauses
+                audio = np.concatenate([np.zeros(gap, np.float32), audio])
             yield audio.astype(np.float32)
             pause = pause_after
 
