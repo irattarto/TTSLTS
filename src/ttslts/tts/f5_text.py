@@ -175,3 +175,19 @@ def keep_enough(cut: float, length_s: float, text: str) -> float:
     if length_s - cut >= 0.5 * expected:
         return cut
     return max(0.0, length_s - 0.5 * expected)
+
+
+NO_FILLER_CHARS = 20  # shorter texts are read without the filler (and nothing is cut)
+
+
+def leading_silence(audio, sr: int) -> float:
+    """Seconds of near-silence before the speech starts (kept to 50 ms before it)."""
+    import numpy as np
+
+    frame = max(1, int(0.01 * sr))
+    n = len(audio) // frame
+    if n == 0:
+        return 0.0
+    level = np.sqrt((np.asarray(audio[: n * frame]).reshape(n, frame) ** 2).mean(axis=1))
+    loud = np.flatnonzero(level > level.max() * 0.05)
+    return max(0.0, (loud[0] if loud.size else 0) * 0.01 - 0.05)

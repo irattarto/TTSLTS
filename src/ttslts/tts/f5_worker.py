@@ -119,9 +119,11 @@ class Reader:
 
         from ttslts.tts.f5_text import (
             FILLER,
+            NO_FILLER_CHARS,
             filler_cut,
             is_lively,
             keep_enough,
+            leading_silence,
             melody_range,
             prepare_text,
         )
@@ -129,21 +131,27 @@ class Reader:
         np = self.np
         text = prepare_text(msg["text"], self.vocab)
         readings = []
+        # a word or two alone (Pronunciations > Listen): no filler. Whisper cannot tell such a
+        # word from the filler in front of it, and the cut took most of the word away
+        filler = "" if len(text) < NO_FILLER_CHARS else FILLER
         for attempt in range(TRIES):
             t0 = time.perf_counter()
             seed_everything(int(msg.get("seed", 0)) + 1000 * attempt)
             wav, sr, _ = infer_process(
-                self.ref_audio, self.ref_text, FILLER + text, self.model.ema_model,
+                self.ref_audio, self.ref_text, filler + text, self.model.ema_model,
                 self.model.vocoder, self.model.mel_spec_type, show_info=lambda *a: None,
                 speed=float(msg.get("speed", 1.0)), nfe_step=int(msg.get("nfe", 32)),
                 device=self.device,
             )  # fmt: skip
             wav = np.asarray(wav, dtype=np.float32)
             t1 = time.perf_counter()
-            cut, ok = filler_cut(self.words(wav, sr), text)
-            safe = keep_enough(cut, len(wav) / sr, text)  # never the text itself cut away
-            ok = ok and safe == cut
-            cut = safe
+            if filler:
+                cut, ok = filler_cut(self.words(wav, sr), text)
+                safe = keep_enough(cut, len(wav) / sr, text)  # never the text itself cut away
+                ok = ok and safe == cut
+                cut = safe
+            else:
+                cut, ok = leading_silence(wav, sr), True
             check = time.perf_counter() - t1
             wav = wav[int(cut * sr) :].copy()
             fade = min(len(wav), int(0.01 * sr))
@@ -160,7 +168,7 @@ class Reader:
                 break
         ok, melody, wav = max(readings, key=lambda r: (r[0], r[1]))  # a good start, then melody
         np.save(msg["out"], wav)  # float32 samples; the app has numpy but not soundfile
-        return {"out": msg["out"], "sr": sr, "ok": ok, "melody": melody}
+        return {"out": msg["out"], "sr": int(sr), "ok": bool(ok), "melody": float(melody)}
 
 
 if __name__ == "__main__":
