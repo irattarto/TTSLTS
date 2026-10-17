@@ -117,11 +117,10 @@ class Reader:
         from f5_tts.infer.utils_infer import infer_process
         from f5_tts.model.utils import seed_everything
 
-        from ttslts.tts.f5_text import FILLER, filler_cut, first_word, prepare_text
+        from ttslts.tts.f5_text import FILLER, filler_cut, prepare_text
 
         np = self.np
         text = prepare_text(msg["text"], self.vocab)
-        first = first_word(text)
         best = None
         for attempt in range(TRIES):
             t0 = time.perf_counter()
@@ -133,7 +132,7 @@ class Reader:
             )  # fmt: skip
             wav = np.asarray(wav, dtype=np.float32)
             t1 = time.perf_counter()
-            cut, ok = filler_cut(self.words(wav, sr), first)
+            cut, ok = filler_cut(self.words(wav, sr), text)
             check = time.perf_counter() - t1
             verdict = "ok" if ok else "WRONG"
             print(

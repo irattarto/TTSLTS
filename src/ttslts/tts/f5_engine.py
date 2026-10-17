@@ -99,12 +99,16 @@ class F5Voice:
     def synthesize(
         self, text: str, speed: float = 1.0, cancelled: Callable[[], bool] | None = None
     ) -> tuple[np.ndarray, int]:
+        from ttslts.tts.hu_numbers import spell_numbers
         from ttslts.tts.hu_text import normalize_hungarian
         from ttslts.tts.piper_engine import split_with_pauses
 
         parts: list[np.ndarray] = []
         pause = 0.0
-        for n, (sentence, pause_after) in enumerate(split_with_pauses(normalize_hungarian(text))):
+        # numbers as words: F5 reads characters and saw almost no digits in training; this runs
+        # before the sentence split, so "1848. március 15." is not cut at its full stops
+        text = spell_numbers(normalize_hungarian(text))
+        for n, (sentence, pause_after) in enumerate(split_with_pauses(text)):
             if cancelled and cancelled():
                 break
             audio = self.say(sentence, speed, seed=n)
