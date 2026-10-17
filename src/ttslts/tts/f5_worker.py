@@ -18,7 +18,7 @@ import sys
 import time
 import traceback
 
-TRIES = 2  # readings per sentence when the start comes out wrong
+TRIES = 2  # readings per sentence when the start comes out wrong or the melody flat
 WHISPER_S = 3.0  # only the start is transcribed: enough to find the first two words
 
 
@@ -117,38 +117,40 @@ class Reader:
         from f5_tts.infer.utils_infer import infer_process
         from f5_tts.model.utils import seed_everything
 
-        from ttslts.tts.f5_text import FILLER, filler_cut, prepare_text
+        from ttslts.tts.f5_text import FILLER, filler_cut, is_lively, melody_range, prepare_text
 
         np = self.np
         text = prepare_text(msg["text"], self.vocab)
-        best = None
+        readings = []
         for attempt in range(TRIES):
             t0 = time.perf_counter()
             seed_everything(int(msg.get("seed", 0)) + 1000 * attempt)
             wav, sr, _ = infer_process(
                 self.ref_audio, self.ref_text, FILLER + text, self.model.ema_model,
                 self.model.vocoder, self.model.mel_spec_type, show_info=lambda *a: None,
-                speed=float(msg.get("speed", 1.0)), device=self.device,
+                speed=float(msg.get("speed", 1.0)), nfe_step=int(msg.get("nfe", 32)),
+                device=self.device,
             )  # fmt: skip
             wav = np.asarray(wav, dtype=np.float32)
             t1 = time.perf_counter()
             cut, ok = filler_cut(self.words(wav, sr), text)
             check = time.perf_counter() - t1
-            verdict = "ok" if ok else "WRONG"
-            print(
-                f"read {len(wav) / sr:.1f} s in {t1 - t0:.1f} s, start check {check:.1f} s, "
-                f"cut at {cut:.2f} s, start {verdict} (try {attempt + 1})",
-                file=sys.stderr,
-            )
             wav = wav[int(cut * sr) :].copy()
             fade = min(len(wav), int(0.01 * sr))
             wav[:fade] *= np.linspace(0, 1, fade, dtype=np.float32)
-            if best is None or ok:
-                best = (wav, ok)
-            if ok:
+            melody = melody_range(wav, sr)
+            verdict = "ok" if ok else "WRONG"
+            print(
+                f"read {len(wav) / sr:.1f} s in {t1 - t0:.1f} s, start check {check:.1f} s, "
+                f"cut at {cut:.2f} s, start {verdict}, melody {melody:.1f} st (try {attempt + 1})",
+                file=sys.stderr,
+            )
+            readings.append((ok, melody, wav))
+            if ok and is_lively(melody, text):
                 break
-        np.save(msg["out"], best[0])  # float32 samples; the app has numpy but not soundfile
-        return {"out": msg["out"], "sr": sr, "ok": best[1]}
+        ok, melody, wav = max(readings, key=lambda r: (r[0], r[1]))  # a good start, then melody
+        np.save(msg["out"], wav)  # float32 samples; the app has numpy but not soundfile
+        return {"out": msg["out"], "sr": sr, "ok": ok, "melody": melody}
 
 
 if __name__ == "__main__":

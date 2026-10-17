@@ -18,6 +18,11 @@ import unicodedata
 
 FILLER = "nos, "  # read before the text, then cut off
 CUT_AFTER_START_S = 0.03
+# A reading's melody depends on its random seed: measured on 15 sentences x 6 seeds, about four
+# in ten came out flat (pitch range under 6 semitones, against 9-10 for a lively one), which
+# sounds tired. Such a reading is tried once more with another seed and the livelier one kept.
+FLAT_SEMITONES = 6.0
+SHORT_CHARS = 25  # a few words are flat anyway: not tried again for that
 # characters that are not in the vocabulary but have a close one that is
 _SAME = {"”": '"', "“": '"', "«": '"', "’": "'", "‘": "'", "—": "–", "(": ",", ")": ","}
 _LETTERS = re.compile(r"[^a-záéíóöőúüű]")
@@ -109,6 +114,32 @@ def filler_cut(words: list[tuple[str, float, float]], text: str) -> tuple[float,
             if 2 <= len(heard) - size and same_word(heard[-size:], expected, close=0.65):
                 share = (len(heard) - size) / len(heard)
                 return start + (end - start) * share, True
+    # Whisper joins and splits words its own way ("anap" for "a nap", "oldsetterhend"): compare
+    # the letters of the text's first two words with what is heard from the second word on
+    target = "".join(letters(w) for w in wanted)
+    for i in (1, 2):
+        heard = "".join(letters(w[0]) for w in words[i : i + 3])[: len(target) + 2]
+        if heard and difflib.SequenceMatcher(None, heard[: len(target)], target).ratio() >= 0.7:
+            return max(words[i - 1][2], words[i][1] + CUT_AFTER_START_S), True
     if len(words) >= 2:
         return (words[0][2] + words[1][1]) / 2, False
     return words[0][2], False
+
+
+def melody_range(audio, sr: int) -> float:
+    """How lively a reading sounds: its pitch range (10th to 90th percentile) in semitones."""
+    import numpy as np
+
+    from ttslts.audio.dsp import estimate_f0, resample
+
+    f0 = estimate_f0(
+        resample(np.asarray(audio, dtype=np.float32), sr, 16000), 16000, fmin=50, fmax=300
+    )
+    voiced = f0[f0 > 0]
+    if len(voiced) < 20:
+        return 0.0
+    return float(12 * np.log2(np.percentile(voiced, 90) / np.percentile(voiced, 10)))
+
+
+def is_lively(melody: float, text: str) -> bool:
+    return melody >= FLAT_SEMITONES or len(text) < SHORT_CHARS

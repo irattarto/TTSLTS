@@ -200,3 +200,102 @@ def test_a_short_first_word_needs_the_next_one_too():
     words = [(" Nos,", 0.0, 0.4), (" a", 0.5, 0.6), (" huszonegyedik", 0.6, 1.4)]
     cut, ok = f5_text.filler_cut(words, "a huszonegyedik században")
     assert ok and cut == pytest.approx(0.53)
+
+
+class FakeSd:
+    class CallbackStop(Exception):
+        pass
+
+    class OutputStream:
+        def __init__(self, callback, finished_callback, **kw):
+            self.callback, self.finished = callback, finished_callback
+
+        def start(self):
+            pass
+
+        def abort(self):
+            pass
+
+        def close(self):
+            pass
+
+    def stop(self):
+        pass
+
+
+def test_speech_stream_plays_pieces_without_gaps(monkeypatch):
+    from ttslts.audio import devices
+
+    monkeypatch.setattr(devices, "_sd", lambda: FakeSd())
+    stream = devices.SpeechStream(1000, None)
+    stream.add(np.ones(3, dtype=np.float32))
+    stream.add(np.full(4, 2.0, dtype=np.float32))
+    out = np.zeros((5, 1), dtype=np.float32)
+    stream._fill(out, 5, None, None)
+    assert out[:, 0].tolist() == [1, 1, 1, 2, 2]  # across the join
+    stream._fill(out, 5, None, None)  # the next piece is not made yet: silence, no end
+    assert out[:, 0].tolist() == [2, 2, 0, 0, 0]
+    stream.finish()
+    with pytest.raises(FakeSd.CallbackStop):
+        stream._fill(out, 5, None, None)
+    stream.stop()
+
+
+def test_f5_speech_starts_with_the_first_sentence(monkeypatch):
+    import threading
+
+    from PySide6.QtCore import Qt
+
+    from ttslts.audio import devices
+
+    controller = Controller(Settings(piper_voice="f5:galambos"), save=lambda s: None)
+    played, made = [], []
+
+    class Voice:
+        sample_rate = 24000
+
+        def pieces(self, text, speed, cancelled):
+            for n in range(3):
+                made.append(n)
+                yield np.full(10, n, dtype=np.float32)
+
+    class Stream:
+        def __init__(self, sr, device):
+            played.append(("open", sr, len(made)))  # opened after the first sentence only
+
+        def add(self, audio):
+            played.append(("add", int(audio[0])))
+
+        def finish(self):
+            played.append(("finish",))
+
+    monkeypatch.setattr(controller, "f5", lambda: Voice())
+    monkeypatch.setattr(devices, "SpeechStream", Stream)
+    monkeypatch.setattr(devices, "resolve", lambda *a: None)
+    done = threading.Event()
+    controller.ttsBusy.connect(
+        lambda busy: None if busy else done.set(), Qt.ConnectionType.DirectConnection
+    )
+    controller.speak("Egy. Kettő. Három.")
+    assert done.wait(5)
+    assert played == [("open", 24000, 1), ("add", 0), ("add", 1), ("add", 2), ("finish",)]
+
+
+def test_melody_range_tells_flat_from_lively():
+    sr = 16000
+    t = np.arange(2 * sr) / sr
+    flat = np.sin(2 * np.pi * 110 * t).astype(np.float32)
+    glide = np.sin(2 * np.pi * np.cumsum(np.geomspace(80, 160, len(t))) / sr).astype(np.float32)
+    assert f5_text.melody_range(flat, sr) < 1
+    assert 8 < f5_text.melody_range(glide, sr) < 12  # an octave, 10th to 90th percentile
+    assert not f5_text.is_lively(3.0, "egy hosszabb mondat, amely laposra sikerült")
+    assert f5_text.is_lively(3.0, "Igen.")  # a few words are flat anyway
+
+
+def test_words_whisper_joins_differently_still_match():
+    words = [(" Nos,", 0.0, 0.4), (" Anap", 0.5, 0.9), (" lassan", 0.9, 1.3)]
+    cut, ok = f5_text.filler_cut(words, "a nap lassan lebukott")
+    assert ok and cut == pytest.approx(0.53)
+    words = [(" Nos,", 0.0, 0.4), (" Oldsetter", 0.5, 1.0), (" hend", 1.0, 1.3)]
+    cut, ok = f5_text.filler_cut(words, "old shatterhand a tűz mellett")
+    assert ok and cut == pytest.approx(0.53)

@@ -493,6 +493,8 @@ class Controller(QObject):
                     if generation != self._tts_generation:
                         return  # stopped before it started
                     self.status.emit("Synthesizing…")
+                    if self._speak_f5_streamed(text, generation):
+                        return
                     audio, sr = self.render_tts(
                         text, cancelled=lambda: generation != self._tts_generation
                     )
@@ -508,6 +510,38 @@ class Controller(QObject):
                 self.ttsBusy.emit(False)
 
         self._background(work, "tts")
+
+    def _speak_f5_streamed(self, text: str, generation: int) -> bool:
+        """Read with an F5 voice, playing each sentence as soon as it is made (F5 takes a few
+        seconds per sentence; the whole text first would mean a long silence). False when the
+        chosen voice is not an F5 voice."""
+        from ttslts.tts import f5_voices, pronunciation
+
+        s = self.settings
+        if not f5_voices.is_f5(s.piper_voice):
+            return False
+
+        def cancelled() -> bool:
+            return generation != self._tts_generation
+
+        voice = self.f5()
+        prepared = pronunciation.apply_for(text, "hu", s.pron_builtin)
+        stream = None
+        try:
+            for piece in voice.pieces(prepared, s.tts_speed, cancelled):
+                if cancelled():
+                    break
+                if stream is None:
+                    device = devices.resolve(s.tts_output_device, "output")
+                    stream = devices.SpeechStream(voice.sample_rate, device)
+                    self.status.emit("Speaking")
+                stream.add(piece)
+        finally:
+            if stream is not None:
+                stream.finish()
+        if cancelled():
+            self.status.emit("Stopped")
+        return True
 
     def save_wav(self, text: str, path: str) -> None:
         def work():
