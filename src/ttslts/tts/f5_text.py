@@ -143,3 +143,35 @@ def melody_range(audio, sr: int) -> float:
 
 def is_lively(melody: float, text: str) -> bool:
     return melody >= FLAT_SEMITONES or len(text) < SHORT_CHARS
+
+
+MIN_CHUNK_CHARS = 40  # shorter sentences are read together with the next one
+SECONDS_PER_CHAR = 0.065  # about how long F5 takes to say one character (galambos: 13-14/s)
+
+
+def join_short(sentences: list[tuple[str, float]], paragraph_s: float) -> list[tuple[str, float]]:
+    """Read short sentences ("Szar!") together with the next one. Alone, a one-word sentence
+    and the filler in front of it were heard as one word and cut away whole; together they also
+    sound more natural. A pause of ``paragraph_s`` or more (a line break) is never joined over."""
+    out: list[tuple[str, float]] = []
+    text, pause = "", 0.0
+    for sentence, pause_after in sentences:
+        text = f"{text} {sentence}".strip()
+        pause = pause_after
+        if len(text) >= MIN_CHUNK_CHARS or pause_after >= paragraph_s:
+            out.append((text, pause))
+            text = ""
+    if text:
+        if out and out[-1][1] < paragraph_s:  # a short last sentence goes with the one before
+            out[-1] = (f"{out[-1][0]} {text}", pause)
+        else:
+            out.append((text, pause))
+    return out
+
+
+def keep_enough(cut: float, length_s: float, text: str) -> float:
+    """Never cut so much that less than half of what ``text`` should take is left."""
+    expected = len(text) * SECONDS_PER_CHAR
+    if length_s - cut >= 0.5 * expected:
+        return cut
+    return max(0.0, length_s - 0.5 * expected)

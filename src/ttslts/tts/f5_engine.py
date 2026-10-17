@@ -103,16 +103,18 @@ class F5Voice:
     ) -> Iterator[np.ndarray]:
         """The reading of ``text`` sentence by sentence, each with the pause before it, so
         playback can start with the first sentence while the next ones are being made."""
+        from ttslts.tts.f5_text import join_short
         from ttslts.tts.hu_numbers import spell_numbers
         from ttslts.tts.hu_text import normalize_hungarian, spell_acronyms
-        from ttslts.tts.piper_engine import split_with_pauses
+        from ttslts.tts.piper_engine import LINE_PAUSE_S, split_with_pauses
 
         # numbers as words: F5 reads characters and saw almost no digits in training; this runs
         # before the sentence split, so "1848. március 15." is not cut at its full stops
         text = spell_numbers(spell_acronyms(normalize_hungarian(text)))  # "SNS": es-en-es
         gain = None
         pause = None
-        for n, (sentence, pause_after) in enumerate(split_with_pauses(text)):
+        chunks = join_short(split_with_pauses(text), LINE_PAUSE_S)
+        for n, (sentence, pause_after) in enumerate(chunks):
             if cancelled and cancelled():
                 return
             audio = self.say(sentence, speed, seed=n)

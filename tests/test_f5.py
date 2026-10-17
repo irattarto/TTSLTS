@@ -108,7 +108,10 @@ def fake_voice(tmp_path):
 
 
 def test_sentences_are_read_one_by_one_with_pauses(fake_voice):
-    audio, sr = fake_voice.synthesize("Első mondat. Második mondat!")
+    audio, sr = fake_voice.synthesize(
+        "Az első mondat elég hosszú ahhoz, hogy maga menjen. "
+        "A második mondat is elég hosszú, ez is külön megy!"
+    )
     assert sr == 1000 and fake_voice.device == "cpu"
     pause = int(0.25 * sr)  # after a full stop, as with Piper
     assert len(audio) == 100 + pause + 100
@@ -122,7 +125,8 @@ def test_stop_ends_the_reading_between_sentences(fake_voice):
         calls.append(1)
         return len(calls) > 1
 
-    audio, _ = fake_voice.synthesize("Első. Második. Harmadik.", cancelled=cancelled)
+    long = "Ez a mondat elég hosszú ahhoz, hogy külön olvassa fel."
+    audio, _ = fake_voice.synthesize(f"{long} {long} {long}", cancelled=cancelled)
     assert len(audio) == 100
 
 
@@ -257,7 +261,7 @@ def test_f5_speech_starts_with_the_first_sentence(monkeypatch):
         def pieces(self, text, speed, cancelled):
             for n in range(3):
                 made.append(n)
-                yield np.full(10, n, dtype=np.float32)
+                yield np.full(7 * 24000, n, dtype=np.float32)  # 7 s: more than the start buffer
 
     class Stream:
         def __init__(self, sr, device):
@@ -318,3 +322,64 @@ def test_an_own_f5_voice_is_chosen_when_none_is(qt_application, isolated_home, t
             w._quitting = True
             w.close()
             w.deleteLater()
+
+
+def test_short_sentences_are_read_with_the_next_one():
+    sentences = [
+        ("„Milyen az ellenzéki lét?", 0.35),
+        ("Szar!", 0.35),
+        ("De nem azért, mert ellenzéki, hanem mert a szakadék felé robog.", 0.25),
+    ]
+    joined = f5_text.join_short(sentences, 0.4)
+    assert joined == [(" ".join(t for t, _ in sentences), 0.25)]
+    # never over a line break, and a short last one goes with the one before
+    two = [("Ez egy elég hosszú mondat, amely maga megy.", 0.25), ("Igen.", 0.25)]
+    assert f5_text.join_short(two, 0.4) == [(f"{two[0][0]} Igen.", 0.25)]
+    assert f5_text.join_short([("Cím", 0.7), ("Szöveg.", 0.25)], 0.4) == [
+        ("Cím", 0.7),
+        ("Szöveg.", 0.25),
+    ]
+
+
+def test_the_cut_never_takes_the_text_away():
+    # "Szar!": Whisper put the cut after the whole word; at least half of it must be left
+    assert f5_text.keep_enough(0.62, 0.65, "szar!") == pytest.approx(0.65 - 0.5 * 5 * 0.065)
+    assert f5_text.keep_enough(0.8, 6.0, "a nap lassan lebukott") == 0.8
+
+
+def test_short_f5_speech_plays_when_all_is_made(monkeypatch):
+    import threading
+
+    from PySide6.QtCore import Qt
+
+    from ttslts.audio import devices
+
+    controller = Controller(Settings(piper_voice="f5:galambos"), save=lambda s: None)
+    played = []
+
+    class Voice:
+        sample_rate = 24000
+
+        def pieces(self, text, speed, cancelled):
+            yield np.ones(24000, dtype=np.float32)  # 1 s: under the start buffer
+
+    class Stream:
+        def __init__(self, sr, device):
+            played.append("open")
+
+        def add(self, audio):
+            played.append(len(audio))
+
+        def finish(self):
+            played.append("finish")
+
+    monkeypatch.setattr(controller, "f5", lambda: Voice())
+    monkeypatch.setattr(devices, "SpeechStream", Stream)
+    monkeypatch.setattr(devices, "resolve", lambda *a: None)
+    done = threading.Event()
+    controller.ttsBusy.connect(
+        lambda busy: None if busy else done.set(), Qt.ConnectionType.DirectConnection
+    )
+    controller.speak("Igen.")
+    assert done.wait(5)
+    assert played == ["open", 24000, "finish"]
