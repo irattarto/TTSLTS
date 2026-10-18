@@ -13,7 +13,7 @@ VOCAB = set(" !',-.:;?\"abcdefghijklmnopqrstuvwxyzáéíóöőúüű0123456789")
 
 def test_text_is_lowercased_and_kept_to_the_vocabulary():
     # capitals are not in the Hungarian vocabulary: they would be read as spaces ("tésőbb")
-    assert f5_text.prepare_text("Később  a „Duna” (partján)", VOCAB) == 'később a „duna" ,partján,'
+    assert f5_text.prepare_text("Később  a „Duna” (partján)", VOCAB) == 'később a „duna", partján,'
     assert f5_text.prepare_text("Ő ÜGETETT ★", VOCAB) == "ő ügetett"
 
 
@@ -400,3 +400,26 @@ def test_f5_speed_is_capped_and_the_rest_shortens_pauses(fake_voice, monkeypatch
     audio, sr = fake_voice.synthesize(f"{long} {long}", speed=1.25)
     assert asked == [1.1, 1.1]  # F5 itself never reads faster than this
     assert len(audio) == 100 + int(0.25 / 1.25 * sr) + 100
+
+
+def test_brackets_and_hanging_hyphens_are_read_naturally():
+    vocab = VOCAB
+    assert f5_text.prepare_text("a Körök (DPK) első", vocab) == "a körök, dpk, első"
+    assert f5_text.prepare_text("kép- és hangfelvétel", vocab) == "kép és hangfelvétel"
+    assert f5_text.prepare_text("bel- vagy külföldi", vocab) == "bel vagy külföldi"
+    assert (
+        f5_text.prepare_text("a szöveg (zárójelben) vége.", vocab) == "a szöveg, zárójelben, vége."
+    )
+
+
+def test_the_start_after_the_cut_is_checked():
+    text = "itt rendezték meg szombaton"
+    assert f5_text.starts_with_text([(" Itt", 0.0, 0.2), (" rendezték", 0.2, 0.8)], text)
+    assert f5_text.starts_with_text([(" Ittrendezték", 0.0, 0.8)], text)  # joined by Whisper
+    assert not f5_text.starts_with_text([(" szombaton", 0.0, 0.6)], text)  # words were cut away
+    assert not f5_text.starts_with_text([(" s", 0.0, 0.1), (" ott", 0.1, 0.3)], "a nap")
+
+
+def test_a_start_missing_its_first_word_does_not_pass():
+    text = "itt rendezték meg szombaton"
+    assert not f5_text.starts_with_text([(" rendezték", 0.0, 0.4), (" meg", 0.4, 0.6)], text)

@@ -119,6 +119,7 @@ class Reader:
 
         from ttslts.tts.f5_text import (
             FILLER,
+            FILLER_MAX_S,
             NO_FILLER_CHARS,
             filler_cut,
             is_lively,
@@ -126,6 +127,7 @@ class Reader:
             leading_silence,
             melody_range,
             prepare_text,
+            starts_with_text,
         )
 
         np = self.np
@@ -146,14 +148,28 @@ class Reader:
             wav = np.asarray(wav, dtype=np.float32)
             t1 = time.perf_counter()
             if filler:
-                cut, ok = filler_cut(self.words(wav, sr), text)
+                words = self.words(wav, sr)
+                print(
+                    "heard: " + " ".join(f"{w}@{s:.2f}" for w, s, _ in words[:5]), file=sys.stderr
+                )
+                cut, ok = filler_cut(words, text)
+                # the filler is said within about a second of the speech starting: a later cut
+                # means Whisper matched the wrong word (it once took "itt rendezték meg" away)
+                latest = leading_silence(wav, sr) + FILLER_MAX_S
+                if cut > latest:
+                    cut, ok = latest, False
                 safe = keep_enough(cut, len(wav) / sr, text)  # never the text itself cut away
-                ok = ok and safe == cut
+                ok = bool(ok and safe == cut)
                 cut = safe
             else:
                 cut, ok = leading_silence(wav, sr), True
             check = time.perf_counter() - t1
             wav = wav[int(cut * sr) :].copy()
+            if filler and ok:  # check the cut by listening to the new start
+                after = self.words(wav, sr)
+                ok = starts_with_text(after, text)
+                if not ok:
+                    print("after the cut: " + " ".join(w for w, _, _ in after[:3]), file=sys.stderr)
             fade = min(len(wav), int(0.01 * sr))
             wav[:fade] *= np.linspace(0, 1, fade, dtype=np.float32)
             melody = melody_range(wav, sr)
