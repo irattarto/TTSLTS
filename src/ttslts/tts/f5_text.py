@@ -17,19 +17,34 @@ import re
 import unicodedata
 
 FILLER = "nos, "  # read before the text, then cut off
+FILLER_MAX_S = 1.6  # from the start of speech the filler is over by then (measured up to 1.4 s)
 CUT_AFTER_START_S = 0.03
 # A reading's melody depends on its random seed: measured on 15 sentences x 6 seeds, about four
 # in ten came out flat (pitch range under 6 semitones, against 9-10 for a lively one), which
 # sounds tired. Such a reading is tried once more with another seed and the livelier one kept.
-FLAT_SEMITONES = 6.0
+# Under 6 a second reading was rarely livelier (12 sentences: 6 retaken, most came out as flat
+# again) and the retakes made reading slower than playback, so only clearly flat ones are.
+FLAT_SEMITONES = 5.0
 SHORT_CHARS = 25  # a few words are flat anyway: not tried again for that
 # characters that are not in the vocabulary but have a close one that is
 _SAME = {"”": '"', "“": '"', "«": '"', "’": "'", "‘": "'", "—": "–", "(": ",", ")": ","}
 _LETTERS = re.compile(r"[^a-záéíóöőúüű]")
 
 
+# "kép- és hangfelvétel" is said "kép és hangfelvétel": the hanging hyphen confused F5
+_HANGING_HYPHEN = re.compile(r"(\w)-\s+(és|vagy|meg|illetve|valamint|ill\.)\s", re.IGNORECASE)
+# brackets read as short pauses: "körök (DPK) első" -> "körök, DPK, első" (a comma stuck to the
+# next word, as in "körök ,dpk", was read with a stray "i" in front)
+_OPEN = re.compile(r"\s*[(\[]\s*")
+_CLOSE = re.compile(r"\s*[)\]]")
+_COMMA_GLUED = re.compile(r"\s+,(?=\S)")
+
+
 def prepare_text(text: str, vocab: set[str]) -> str:
     """Lowercase ``text`` and keep only what the voice's vocabulary knows."""
+    text = _HANGING_HYPHEN.sub(lambda m: f"{m.group(1)} {m.group(2)} ", text)
+    text = _CLOSE.sub(",", _OPEN.sub(", ", text))
+    text = _COMMA_GLUED.sub(", ", text)
     out = []
     for ch in unicodedata.normalize("NFC", text.lower()):
         ch = _SAME.get(ch, ch)
@@ -119,7 +134,7 @@ def filler_cut(words: list[tuple[str, float, float]], text: str) -> tuple[float,
     target = "".join(letters(w) for w in wanted)
     for i in (1, 2):
         heard = "".join(letters(w[0]) for w in words[i : i + 3])[: len(target) + 2]
-        if heard and difflib.SequenceMatcher(None, heard[: len(target)], target).ratio() >= 0.7:
+        if joined_match(heard, target, letters(wanted[0])):
             return max(words[i - 1][2], words[i][1] + CUT_AFTER_START_S), True
     if len(words) >= 2:
         return (words[0][2] + words[1][1]) / 2, False
@@ -191,3 +206,25 @@ def leading_silence(audio, sr: int) -> float:
     level = np.sqrt((np.asarray(audio[: n * frame]).reshape(n, frame) ** 2).mean(axis=1))
     loud = np.flatnonzero(level > level.max() * 0.05)
     return max(0.0, (loud[0] if loud.size else 0) * 0.01 - 0.05)
+
+
+def starts_with_text(words: list[tuple[str, float, float]], text: str) -> bool:
+    """After the cut: does the reading start with the text's first word? (Whisper's word times
+    are sometimes off by most of a second, and a cut placed by them took real words away.)"""
+    wanted = first_words(text)
+    if not words or not wanted:
+        return False
+    if same_word(words[0][0], wanted[0]):
+        return True
+    target = "".join(letters(w) for w in wanted)
+    heard = "".join(letters(w[0]) for w in words[:3])
+    return joined_match(heard, target, letters(wanted[0]))
+
+
+def joined_match(heard: str, target: str, first: str) -> bool:
+    """Whether the letters ``heard`` (words joined) are the text's first words ``target``; they
+    must also begin like its first word, or "rendeztékmeg" would pass for "itt rendezték"."""
+    start = first[: min(2, len(first))]
+    if not heard or not heard.startswith(start):
+        return False
+    return difflib.SequenceMatcher(None, heard[: len(target)], target).ratio() >= 0.7
