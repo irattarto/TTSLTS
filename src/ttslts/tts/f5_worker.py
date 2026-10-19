@@ -77,8 +77,11 @@ class Reader:
             device=self.device, use_ema=True,
         )  # fmt: skip
         self.ref_audio = msg["ref_audio"]
+        info = sf.info(self.ref_audio)
+        self.ref_seconds = info.frames / info.samplerate
         ref = open(msg["ref_text"], encoding="utf-8").read()
         self.ref_text = reference_text(ref, self.vocab)
+        self.ref_bytes = len(self.ref_text.encode("utf-8"))
         self.whisper_dir = msg.get("whisper_dir")
         self._asr = None
 
@@ -114,6 +117,29 @@ class Reader:
         return [(w.word, w.start, w.end) for s in segments for w in (s.words or [])]
 
     def say(self, msg: dict) -> dict:
+        from ttslts.tts.f5_text import FILLER, PART_PAUSE_S, prepare_text, split_parts
+
+        np = self.np
+        text = prepare_text(msg["text"], self.vocab)
+        speed = float(msg.get("speed", 1.0))
+        # what F5 would read in one go (its own rule), less the filler: a longer sentence is cut
+        # into parts here, so that every part gets the filler (F5's own parts each started with
+        # a stray sound: "Igrandiózus")
+        limit = int(self.ref_bytes / self.ref_seconds * (22 - self.ref_seconds) * speed)
+        parts = split_parts(text, limit - len(FILLER.encode("utf-8")))
+        seed = int(msg.get("seed", 0))
+        results = [self.read_part(part, seed + 100 * k, speed, msg) for k, part in enumerate(parts)]
+        sr = results[0][3]
+        gap = np.zeros(int(PART_PAUSE_S * sr), dtype=np.float32)
+        wav = np.concatenate([x for r in results for x in (gap, r[2])][1:])
+        ok = all(r[0] for r in results)
+        melody = float(np.mean([r[1] for r in results]))
+        np.save(msg["out"], wav)  # float32 samples; the app has numpy but not soundfile
+        return {"out": msg["out"], "sr": int(sr), "ok": bool(ok), "melody": melody}
+
+    def read_part(self, text: str, seed: int, speed: float, msg: dict):
+        """One reading of ``text`` (short enough for F5 in one go): filler, cut, checks and a
+        second try when the start is wrong or the melody flat. Returns (ok, melody, wav, sr)."""
         from f5_tts.infer.utils_infer import infer_process
         from f5_tts.model.utils import seed_everything
 
@@ -126,23 +152,22 @@ class Reader:
             keep_enough,
             leading_silence,
             melody_range,
-            prepare_text,
             starts_with_text,
+            trim_leftover,
         )
 
         np = self.np
-        text = prepare_text(msg["text"], self.vocab)
         readings = []
         # a word or two alone (Pronunciations > Listen): no filler. Whisper cannot tell such a
         # word from the filler in front of it, and the cut took most of the word away
         filler = "" if len(text) < NO_FILLER_CHARS else FILLER
         for attempt in range(TRIES):
             t0 = time.perf_counter()
-            seed_everything(int(msg.get("seed", 0)) + 1000 * attempt)
+            seed_everything(seed + 1000 * attempt)
             wav, sr, _ = infer_process(
                 self.ref_audio, self.ref_text, filler + text, self.model.ema_model,
                 self.model.vocoder, self.model.mel_spec_type, show_info=lambda *a: None,
-                speed=float(msg.get("speed", 1.0)), nfe_step=int(msg.get("nfe", 32)),
+                speed=speed, nfe_step=int(msg.get("nfe", 32)),
                 device=self.device,
             )  # fmt: skip
             wav = np.asarray(wav, dtype=np.float32)
@@ -165,12 +190,16 @@ class Reader:
                 cut, ok = leading_silence(wav, sr), True
             check = time.perf_counter() - t1
             wav = wav[int(cut * sr) :].copy()
+            if filler:  # what is left of "nos" before the first word (heard as an "s")
+                wav = wav[int(trim_leftover(wav, sr) * sr) :].copy()
             if filler and ok:  # check the cut by listening to the new start
                 after = self.words(wav, sr)
                 ok = starts_with_text(after, text)
                 if not ok:
                     print("after the cut: " + " ".join(w for w, _, _ in after[:3]), file=sys.stderr)
-            fade = min(len(wav), int(0.01 * sr))
+            # with the filler: fade in over the 50 ms kept before the word, so a faint "s" left
+            # there goes quiet while the word's soft start ("m", "j") at its end stays
+            fade = min(len(wav), int((0.05 if filler else 0.01) * sr))
             wav[:fade] *= np.linspace(0, 1, fade, dtype=np.float32)
             melody = melody_range(wav, sr)
             verdict = "ok" if ok else "WRONG"
@@ -183,8 +212,7 @@ class Reader:
             if ok and is_lively(melody, text):
                 break
         ok, melody, wav = max(readings, key=lambda r: (r[0], r[1]))  # a good start, then melody
-        np.save(msg["out"], wav)  # float32 samples; the app has numpy but not soundfile
-        return {"out": msg["out"], "sr": int(sr), "ok": bool(ok), "melody": float(melody)}
+        return ok, melody, wav, sr
 
 
 if __name__ == "__main__":

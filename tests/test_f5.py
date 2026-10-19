@@ -13,7 +13,7 @@ VOCAB = set(" !',-.:;?\"abcdefghijklmnopqrstuvwxyzáéíóöőúüű0123456789")
 
 def test_text_is_lowercased_and_kept_to_the_vocabulary():
     # capitals are not in the Hungarian vocabulary: they would be read as spaces ("tésőbb")
-    assert f5_text.prepare_text("Később  a „Duna” (partján)", VOCAB) == 'később a „duna", partján,'
+    assert f5_text.prepare_text("Később  a „Duna” (partján)", VOCAB) == "később a duna, partján,"
     assert f5_text.prepare_text("Ő ÜGETETT ★", VOCAB) == "ő ügetett"
 
 
@@ -331,7 +331,8 @@ def test_short_sentences_are_read_with_the_next_one():
         ("De nem azért, mert ellenzéki, hanem mert a szakadék felé robog.", 0.25),
     ]
     joined = f5_text.join_short(sentences, 0.4)
-    assert joined == [(" ".join(t for t, _ in sentences), 0.25)]
+    # only the very short one goes with the next: the question keeps its own pause
+    assert joined == [sentences[0], (f"{sentences[1][0]} {sentences[2][0]}", 0.25)]
     # never over a line break, and a short last one goes with the one before
     two = [("Ez egy elég hosszú mondat, amely maga megy.", 0.25), ("Igen.", 0.25)]
     assert f5_text.join_short(two, 0.4) == [(f"{two[0][0]} Igen.", 0.25)]
@@ -423,3 +424,49 @@ def test_the_start_after_the_cut_is_checked():
 def test_a_start_missing_its_first_word_does_not_pass():
     text = "itt rendezték meg szombaton"
     assert not f5_text.starts_with_text([(" rendezték", 0.0, 0.4), (" meg", 0.4, 0.6)], text)
+
+
+def test_what_is_left_of_the_filler_is_cut():
+    sr = 1000
+    word = np.full(500, 0.5, np.float32)
+    faint = np.full(100, 0.002, np.float32)  # 48 dB under the word: a faint "s"
+    assert f5_text.trim_leftover(np.concatenate([faint, word]), sr) == pytest.approx(0.05)
+    scrap = np.full(40, 0.2, np.float32)  # a short louder scrap, a gap, then the word
+    gap = np.zeros(60, np.float32)
+    assert f5_text.trim_leftover(np.concatenate([scrap, gap, word]), sr) == pytest.approx(0.05)
+    assert f5_text.trim_leftover(word, sr) == 0.0  # nothing in front: nothing cut
+
+
+def test_quotes_and_word_hyphens_are_left_out():
+    # quotation marks were read as sounds („milyen -> imilyen, ország" -> országkő)
+    said = f5_text.prepare_text('„Milyen az ország" – válaszolta', VOCAB)
+    assert said == "milyen az ország – válaszolta"
+    assert (
+        f5_text.prepare_text("kisebb-nagyobb csoportokban", VOCAB) == "kissebb nagyobb csoportokban"
+    )
+
+
+def test_long_sentences_are_cut_at_clause_boundaries():
+    text = (
+        "a lezsák sándor által alapított, harminc milliárd forintból felépített, "
+        "grandiózus ligetben"
+    )
+    parts = f5_text.split_parts(text, 60)
+    assert parts == ["a lezsák sándor által alapított,", "harminc milliárd forintból felépített,",
+                     "grandiózus ligetben"]  # fmt: skip
+    assert all(len(p.encode("utf-8")) <= 60 for p in parts)
+    assert f5_text.split_parts("rövid mondat.", 60) == ["rövid mondat."]
+    long_clause = " ".join(["szó"] * 40)
+    assert all(len(p.encode("utf-8")) <= 60 for p in f5_text.split_parts(long_clause, 60))
+
+
+def test_a_word_with_its_start_cut_away_is_not_the_word():
+    assert not f5_text.same_word("oldalinak", "jobboldalinak")
+    assert f5_text.same_word("Vinnetu", "winnetou")  # v and w are one
+    assert not f5_text.starts_with_text([(" oldalinak", 0.0, 0.5)], "jobboldalinak vagy")
+
+
+def test_kisebb_is_read_with_a_long_s():
+    assert f5_text.prepare_text("A kisebb és a legkisebb kisebbség", VOCAB) == (
+        "a kissebb és a legkissebb kissebbség"
+    )
