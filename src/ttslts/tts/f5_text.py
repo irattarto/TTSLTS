@@ -27,7 +27,11 @@ CUT_AFTER_START_S = 0.03
 FLAT_SEMITONES = 5.0
 SHORT_CHARS = 25  # a few words are flat anyway: not tried again for that
 # characters that are not in the vocabulary but have a close one that is
-_SAME = {"”": '"', "“": '"', "«": '"', "’": "'", "‘": "'", "—": "–", "(": ",", ")": ","}
+_SAME = {"’": "'", "‘": "'", "—": "–", "(": ",", ")": ","}
+# quotation marks were read as sounds: „milyen -> "imilyen", ország" -> "országkő"
+_QUOTES = re.compile(r"[\"„”“«»]")
+# a hyphen between words ("kisebb-nagyobb", "jöttek-mentek") was read badly: a space instead
+_WORD_HYPHEN = re.compile(r"(?<=[a-záéíóöőúüű])-(?=[a-záéíóöőúüű])")
 _LETTERS = re.compile(r"[^a-záéíóöőúüű]")
 
 
@@ -40,11 +44,17 @@ _CLOSE = re.compile(r"\s*[)\]]")
 _COMMA_GLUED = re.compile(r"\s+,(?=\S)")
 
 
+# words said otherwise than written, which F5 reads by the letters: "kisebb" has a long s
+_SAID_AS = [(re.compile(r"\b(leg)?kisebb", re.IGNORECASE), r"\1kissebb")]
+
+
 def prepare_text(text: str, vocab: set[str]) -> str:
     """Lowercase ``text`` and keep only what the voice's vocabulary knows."""
+    for pattern, said in _SAID_AS:
+        text = pattern.sub(said, text)
     text = _HANGING_HYPHEN.sub(lambda m: f"{m.group(1)} {m.group(2)} ", text)
     text = _CLOSE.sub(",", _OPEN.sub(", ", text))
-    text = _COMMA_GLUED.sub(", ", text)
+    text = _COMMA_GLUED.sub(", ", _QUOTES.sub("", text))
     out = []
     for ch in unicodedata.normalize("NFC", text.lower()):
         ch = _SAME.get(ch, ch)
@@ -52,7 +62,7 @@ def prepare_text(text: str, vocab: set[str]) -> str:
             out.append(ch)
         elif ch.isspace():
             out.append(" ")
-    return " ".join("".join(out).split())
+    return " ".join(_WORD_HYPHEN.sub(" ", "".join(out)).split())
 
 
 def reference_text(text: str, vocab: set[str]) -> str:
@@ -73,9 +83,13 @@ def letters(word: str) -> str:
 
 
 def same_word(heard: str, expected: str, close: float = 0.75) -> bool:
-    """Whether speech recognition heard ``expected`` (allowing a letter or two to differ)."""
+    """Whether speech recognition heard ``expected`` (allowing a letter or two to differ). The
+    first letter must agree (v and w count as one: "Vinnetu"): "oldalinak" for "jobboldalinak"
+    is the word with its start cut away, not another spelling of it."""
     a, b = letters(heard), letters(expected)
     if not a or not b:
+        return False
+    if a[0].replace("w", "v") != b[0].replace("w", "v"):
         return False
     return a == b or difflib.SequenceMatcher(None, a, b).ratio() >= close
 
@@ -160,7 +174,9 @@ def is_lively(melody: float, text: str) -> bool:
     return melody >= FLAT_SEMITONES or len(text) < SHORT_CHARS
 
 
-MIN_CHUNK_CHARS = 40  # shorter sentences are read together with the next one
+# shorter sentences are read together with the next one. 40 joined "Milyen az ellenzéki lét?"
+# with "Szar!" and the next one: read in one go, they ran together without their pauses
+MIN_CHUNK_CHARS = 20
 SECONDS_PER_CHAR = 0.065  # about how long F5 takes to say one character (galambos: 13-14/s)
 
 
@@ -228,3 +244,72 @@ def joined_match(heard: str, target: str, first: str) -> bool:
     if not heard or not heard.startswith(start):
         return False
     return difflib.SequenceMatcher(None, heard[: len(target)], target).ratio() >= 0.7
+
+
+def trim_leftover(audio, sr: int, window_s: float = 0.35) -> float:
+    """Seconds to cut off the start after the filler cut: what is left of "nos" before the first
+    word. Two kinds were found: a faint hiss (about 45 dB under the speech, heard as an "s") and
+    a short louder scrap followed by a gap. Cut to 30 ms before the first frame within 35 dB of
+    the speech's loudest, skipping a scrap of up to 150 ms that is followed by 40 ms of quiet."""
+    import numpy as np
+
+    frame = int(0.01 * sr)
+    n_all = len(audio) // frame
+    if n_all < 5:
+        return 0.0
+    level = 10 * np.log10(
+        (np.asarray(audio[: n_all * frame], dtype=np.float32).reshape(n_all, frame) ** 2).mean(
+            axis=1
+        )
+        + 1e-12
+    )
+    speech = level > level.max() - 40
+    n = min(n_all, int(window_s / 0.01))
+    i = 0
+    while i < n and not speech[i]:
+        i += 1
+    if i < n:  # a short scrap, then a gap, then the word: skip the scrap
+        j = i
+        while j < n and speech[j]:
+            j += 1
+        k = j
+        while k < n and not speech[k]:
+            k += 1
+        if j - i <= 15 and k - j >= 4 and k < n:
+            i = k
+    return max(0.0, (min(i, n) - 5) * 0.01)  # 50 ms kept: a soft "m" or "j" sounded cut
+
+
+PART_PAUSE_S = 0.12  # between the parts of a long sentence (they are cut at a comma or a dash)
+
+
+def split_parts(text: str, max_bytes: int) -> list[str]:
+    """A sentence too long for one F5 reading, cut at clause boundaries (comma, dash, semicolon,
+    colon), each part at most ``max_bytes`` of UTF-8. F5 starts every part afresh, with a stray
+    sound in front ("Igrandiózus"), so each part is read on its own with the filler."""
+    if len(text.encode("utf-8")) <= max_bytes:
+        return [text]
+    clauses = re.split(r"(?<=[,;:–])\s+", text)
+    parts, current = [], ""
+    for clause in clauses:
+        joined = f"{current} {clause}".strip()
+        if current and len(joined.encode("utf-8")) > max_bytes:
+            parts.append(current)
+            current = clause
+        else:
+            current = joined
+    if current:
+        parts.append(current)
+    out = []
+    for part in parts:  # a clause longer than the limit: as many words as fit, then the next
+        line = ""
+        for word in part.split():
+            joined = f"{line} {word}".strip()
+            if line and len(joined.encode("utf-8")) > max_bytes:
+                out.append(line)
+                line = word
+            else:
+                line = joined
+        if line:
+            out.append(line)
+    return out
