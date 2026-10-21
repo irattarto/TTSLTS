@@ -470,3 +470,17 @@ def test_kisebb_is_read_with_a_long_s():
     assert f5_text.prepare_text("A kisebb és a legkisebb kisebbség", VOCAB) == (
         "a kissebb és a legkissebb kissebbség"
     )
+
+
+def test_a_vowel_start_is_cut_to_the_vowel():
+    sr = 24000
+    rng = np.random.default_rng(1)
+    scrap = (np.diff(rng.standard_normal(int(0.04 * sr) + 1)) * 0.05).astype(np.float32)  # hiss
+    pause = np.zeros(int(0.3 * sr), np.float32)
+    t = np.arange(int(0.4 * sr)) / sr
+    vowel = (0.5 * np.sin(2 * np.pi * 140 * t)).astype(np.float32)
+    audio = np.concatenate([scrap, pause, vowel])
+    assert f5_text.vowel_onset(audio, sr) == pytest.approx(0.32, abs=0.011)  # 20 ms before "a"
+    assert f5_text.vowel_onset(vowel, sr) == 0.0
+    assert f5_text.starts_with_vowel("A tűzoltók") and not f5_text.starts_with_vowel("Zsófi a")
+    assert f5_text.trim_leftover(audio, sr) == pytest.approx(0.29, abs=0.011)  # scrap + pause

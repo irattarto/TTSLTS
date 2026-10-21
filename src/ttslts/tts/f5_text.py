@@ -246,7 +246,7 @@ def joined_match(heard: str, target: str, first: str) -> bool:
     return difflib.SequenceMatcher(None, heard[: len(target)], target).ratio() >= 0.7
 
 
-def trim_leftover(audio, sr: int, window_s: float = 0.35) -> float:
+def trim_leftover(audio, sr: int, window_s: float = 0.8) -> float:
     """Seconds to cut off the start after the filler cut: what is left of "nos" before the first
     word. Two kinds were found: a faint hiss (about 45 dB under the speech, heard as an "s") and
     a short louder scrap followed by a gap. Cut to 30 ms before the first frame within 35 dB of
@@ -313,3 +313,33 @@ def split_parts(text: str, max_bytes: int) -> list[str]:
         if line:
             out.append(line)
     return out
+
+
+VOWELS = set("aáeéiíoóöőuúüű")
+
+
+def starts_with_vowel(text: str) -> bool:
+    word = letters(first_word(text))
+    return bool(word) and word[0] in VOWELS
+
+
+def vowel_onset(audio, sr: int, window_s: float = 0.8) -> float:
+    """Where the first vowel starts (20 ms before it), for a text that begins with a vowel: all
+    that comes before is left of the filler. The 24 kHz voice made that leftover hiss loud enough
+    to pass for speech ("A tűzoltók" started with a faint "s"). A vowel frame = loud (within
+    30 dB of the loudest) and mostly sound under 1 kHz. 0 when no such frame is found."""
+    import numpy as np
+
+    frame = int(0.01 * sr)
+    n_all = len(audio) // frame
+    if n_all < 5:
+        return 0.0
+    frames = np.asarray(audio[: n_all * frame], dtype=np.float32).reshape(n_all, frame)
+    level = 10 * np.log10((frames**2).mean(axis=1) + 1e-12)
+    n = min(n_all, int(window_s / 0.01))
+    spec = np.abs(np.fft.rfft(frames[:n] * np.hanning(frame), axis=1)) ** 2
+    low = spec[:, np.fft.rfftfreq(frame, 1 / sr) < 1000].sum(axis=1) / (spec.sum(axis=1) + 1e-12)
+    for i in range(n):
+        if level[i] > level.max() - 30 and low[i] > 0.6:
+            return max(0.0, (i - 2) * 0.01)
+    return 0.0
