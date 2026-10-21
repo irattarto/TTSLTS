@@ -153,7 +153,9 @@ class Reader:
             leading_silence,
             melody_range,
             starts_with_text,
+            starts_with_vowel,
             trim_leftover,
+            vowel_onset,
         )
 
         np = self.np
@@ -192,6 +194,8 @@ class Reader:
             wav = wav[int(cut * sr) :].copy()
             if filler:  # what is left of "nos" before the first word (heard as an "s")
                 wav = wav[int(trim_leftover(wav, sr) * sr) :].copy()
+                if starts_with_vowel(text):  # all before the first vowel is filler leftover
+                    wav = wav[int(vowel_onset(wav, sr) * sr) :].copy()
             if filler and ok:  # check the cut by listening to the new start
                 after = self.words(wav, sr)
                 ok = starts_with_text(after, text)
@@ -199,7 +203,8 @@ class Reader:
                     print("after the cut: " + " ".join(w for w, _, _ in after[:3]), file=sys.stderr)
             # with the filler: fade in over the 50 ms kept before the word, so a faint "s" left
             # there goes quiet while the word's soft start ("m", "j") at its end stays
-            fade = min(len(wav), int((0.05 if filler else 0.01) * sr))
+            soft = filler and not starts_with_vowel(text)  # a vowel start is cut close: short fade
+            fade = min(len(wav), int((0.05 if soft else 0.01) * sr))
             wav[:fade] *= np.linspace(0, 1, fade, dtype=np.float32)
             melody = melody_range(wav, sr)
             verdict = "ok" if ok else "WRONG"
