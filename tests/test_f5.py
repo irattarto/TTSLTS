@@ -113,7 +113,7 @@ def test_sentences_are_read_one_by_one_with_pauses(fake_voice):
         "A második mondat is elég hosszú, ez is külön megy!"
     )
     assert sr == 1000 and fake_voice.device == "cpu"
-    pause = int(0.25 * sr)  # after a full stop, as with Piper
+    pause = int((0.25 + 0.2) * sr)  # after a full stop: Piper's pause and a little more
     assert len(audio) == 100 + pause + 100
     assert np.abs(audio).max() == pytest.approx(0.9)
 
@@ -404,7 +404,7 @@ def test_f5_speed_is_capped_and_the_rest_shortens_pauses(fake_voice, monkeypatch
     long = "Ez a mondat elég hosszú ahhoz, hogy külön olvassa fel."
     audio, sr = fake_voice.synthesize(f"{long} {long}", speed=1.25)
     assert asked == [1.1, 1.1]  # F5 itself never reads faster than this
-    assert len(audio) == 100 + int(0.25 / 1.25 * sr) + 100
+    assert len(audio) == 100 + int((0.25 + 0.2) / 1.25 * sr) + 100
 
 
 def test_brackets_and_hanging_hyphens_are_read_naturally():
