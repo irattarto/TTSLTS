@@ -71,6 +71,7 @@ class F5Voice:
             whisper_dir=str(paths.models_dir() / "whisper"),
         )
         self.device = reply.get("device", "cpu")
+        self.part_bytes = int(reply.get("part_bytes", 0))  # 0: the worker cuts long ones itself
 
     def _ask(self, **msg) -> dict:
         proc = self._proc
@@ -109,7 +110,7 @@ class F5Voice:
     ) -> Iterator[np.ndarray]:
         """The reading of ``text`` sentence by sentence, each with the pause before it, so
         playback can start with the first sentence while the next ones are being made."""
-        from ttslts.tts.f5_text import join_short
+        from ttslts.tts.f5_text import FILLER, PART_PAUSE_S, join_short, split_parts
         from ttslts.tts.hu_numbers import spell_numbers
         from ttslts.tts.hu_text import normalize_hungarian, spell_acronyms
         from ttslts.tts.piper_engine import LINE_PAUSE_S, split_with_pauses
@@ -120,10 +121,19 @@ class F5Voice:
         gain = None
         pause = None
         chunks = join_short(split_with_pauses(text), LINE_PAUSE_S)
+        f5_speed = min(speed, F5_MAX_SPEED)
+        if self.part_bytes:  # long sentences in parts, each played as soon as it is read
+            limit = int(self.part_bytes * f5_speed) - len(FILLER.encode("utf-8"))
+            chunks = [
+                (part, pause_after if k == len(parts) - 1 else PART_PAUSE_S)
+                for sentence, pause_after in chunks
+                for parts in [split_parts(sentence, limit)]
+                for k, part in enumerate(parts)
+            ]
         for n, (sentence, pause_after) in enumerate(chunks):
             if cancelled and cancelled():
                 return
-            audio = self.say(sentence, min(speed, F5_MAX_SPEED), seed=n)
+            audio = self.say(sentence, f5_speed, seed=n)
             if not audio.size:
                 continue
             peak = float(np.abs(audio).max())

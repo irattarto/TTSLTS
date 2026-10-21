@@ -8,6 +8,7 @@ import os
 import subprocess
 import sys
 import threading
+import time
 from collections.abc import Callable
 from pathlib import Path
 
@@ -22,7 +23,10 @@ from ttslts.settings import Settings
 
 log = logging.getLogger(__name__)
 
-F5_START_BUFFER_S = 6.0  # F5 speech plays once this much is made (or all of it)
+F5_START_BUFFER_S = 6.0  # F5 speech plays once this much is made (or all of it)...
+F5_MAX_WAIT_S = 8.0  # but playback starts with the first piece made after this long
+F5_MIN_START_S = 4.0  # ...with at least this much made (a short first sentence alone: no)
+F5_SECONDS_PER_CHAR = 0.07  # ...and once what is made outlasts making the rest (estimate)
 LIVE_GPU_NEED_MB = 1024  # free video memory the live voice changer needs (0.8 GB measured + room)
 
 
@@ -529,32 +533,63 @@ class Controller(QObject):
         prepared = pronunciation.apply_for(text, "hu", s.pron_builtin)
         stream = None
         waiting: list[np.ndarray] = []  # made before playback starts
+        expected_s = len(prepared) * F5_SECONDS_PER_CHAR / max(s.tts_speed, 0.1)
+        began = time.monotonic()
+
+        def enough(made_s: float) -> bool:
+            """Whether playback can start without running out: a sentence read twice takes 8 s
+            or more to make, and a pause opened up after the first one when playback started
+            as soon as 6 s were made. The time making the rest will take is estimated from how
+            fast it went so far."""
+            waited = time.monotonic() - began
+            if waited >= F5_MAX_WAIT_S:  # never longer: if making is slower than speaking, the
+                return True  # pauses between sentences get longer instead
+            if made_s < F5_START_BUFFER_S:
+                return False
+            rate = waited / made_s  # seconds of making per second of speech
+            rest = max(0.0, expected_s - made_s)
+            return made_s >= rest * (rate - 1.0) + F5_START_BUFFER_S
+
+        lock = threading.Lock()  # the timer below may start playback while a piece is made
+        timer: threading.Timer | None = None
 
         def start() -> None:
             nonlocal stream
-            device = devices.resolve(s.tts_output_device, "output")
-            stream = devices.SpeechStream(voice.sample_rate, device)
-            for piece in waiting:
-                stream.add(piece)
+            with lock:
+                if stream is not None or not waiting or cancelled():
+                    return
+                device = devices.resolve(s.tts_output_device, "output")
+                stream = devices.SpeechStream(voice.sample_rate, device)
+                for piece in waiting:
+                    stream.add(piece)
             self.status.emit("Speaking")
 
         try:
             for piece in voice.pieces(prepared, s.tts_speed, cancelled):
                 if cancelled():
                     break
-                if stream is not None:
-                    stream.add(piece)
-                    continue
-                waiting.append(piece)
+                with lock:
+                    if stream is not None:
+                        stream.add(piece)
+                        continue
+                    waiting.append(piece)
+                    made_s = sum(len(p) for p in waiting) / voice.sample_rate
                 # a few seconds in hand first: a sentence read twice (flat or a bad start)
                 # takes about 8 s to make, and would otherwise leave a pause after the first
-                if sum(len(p) for p in waiting) >= F5_START_BUFFER_S * voice.sample_rate:
+                if enough(made_s):
                     start()
-            if stream is None and waiting and not cancelled():
-                start()  # a short text: all of it is made
+                elif timer is None and made_s >= F5_MIN_START_S:  # at the latest after
+                    left = max(0.0, F5_MAX_WAIT_S - (time.monotonic() - began))  # F5_MAX_WAIT_S
+                    timer = threading.Timer(left, start)
+                    timer.daemon = True
+                    timer.start()
+            start()  # a short text: all of it is made (does nothing once playing)
         finally:
-            if stream is not None:
-                stream.finish()
+            if timer is not None:
+                timer.cancel()
+            with lock:
+                if stream is not None:
+                    stream.finish()
         if cancelled():
             self.status.emit("Stopped")
         return True

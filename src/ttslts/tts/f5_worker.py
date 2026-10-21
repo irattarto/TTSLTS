@@ -39,7 +39,10 @@ def main() -> None:
         try:
             if msg.get("op") == "load":
                 reader = Reader(msg)
-                send(type="loaded", device=reader.device)
+                # how much text F5 reads in one go at speed 1 (its own rule), so the app can cut
+                # long sentences into parts that each come back as soon as they are read
+                limit = int(reader.ref_bytes / reader.ref_seconds * (22 - reader.ref_seconds))
+                send(type="loaded", device=reader.device, part_bytes=limit)
             elif msg.get("op") == "say":
                 if reader is None:
                     raise RuntimeError("no voice loaded")
@@ -152,8 +155,10 @@ class Reader:
             keep_enough,
             leading_silence,
             melody_range,
+            shorten_pauses,
             starts_with_text,
             starts_with_vowel,
+            trailing_silence,
             trim_leftover,
             vowel_onset,
         )
@@ -206,6 +211,8 @@ class Reader:
             soft = filler and not starts_with_vowel(text)  # a vowel start is cut close: short fade
             fade = min(len(wav), int((0.05 if soft else 0.01) * sr))
             wav[:fade] *= np.linspace(0, 1, fade, dtype=np.float32)
+            wav = wav[: len(wav) - int(trailing_silence(wav, sr) * sr)]  # pauses: the app's own
+            wav = shorten_pauses(wav, sr)
             melody = melody_range(wav, sr)
             verdict = "ok" if ok else "WRONG"
             print(

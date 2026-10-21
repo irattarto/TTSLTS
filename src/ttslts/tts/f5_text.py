@@ -343,3 +343,56 @@ def vowel_onset(audio, sr: int, window_s: float = 0.8) -> float:
         if level[i] > level.max() - 30 and low[i] > 0.6:
             return max(0.0, (i - 2) * 0.01)
     return 0.0
+
+
+def trailing_silence(audio, sr: int, keep_s: float = 0.05) -> float:
+    """Seconds of near-silence at the end beyond ``keep_s``. F5 leaves some after the speech, and
+    with the app's own pause after the sentence that made pauses of up to 1.6 s."""
+    import numpy as np
+
+    frame = int(0.01 * sr)
+    n = len(audio) // frame
+    if n < 5:
+        return 0.0
+    level = 10 * np.log10(
+        (np.asarray(audio[: n * frame], dtype=np.float32).reshape(n, frame) ** 2).mean(axis=1)
+        + 1e-12
+    )
+    loud = np.flatnonzero(level > level.max() - 45)
+    if not loud.size:
+        return 0.0
+    end = (loud[-1] + 1) * frame / sr
+    return max(0.0, len(audio) / sr - end - keep_s)
+
+
+MAX_PAUSE_S = 0.6  # longest pause kept inside one reading
+
+
+def shorten_pauses(audio, sr: int, longest_s: float = MAX_PAUSE_S):
+    """``audio`` with every silence longer than ``longest_s`` shortened to it. F5 sometimes holds
+    a long pause inside a reading (1.6 s after "Szar!" before the next sentence)."""
+    import numpy as np
+
+    audio = np.asarray(audio, dtype=np.float32)
+    frame = int(0.01 * sr)
+    n = len(audio) // frame
+    if n < 5:
+        return audio
+    level = 10 * np.log10((audio[: n * frame].reshape(n, frame) ** 2).mean(axis=1) + 1e-12)
+    quiet = level < level.max() - 45
+    keep = int(longest_s / 0.01)
+    parts, start, i = [], 0, 0
+    while i < n:
+        if not quiet[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and quiet[j]:
+            j += 1
+        if j - i > keep and i > 0 and j < n:  # inside the speech: keep half each side
+            half = keep // 2
+            parts.append(audio[start * frame : (i + half) * frame])
+            start = j - (keep - half)
+        i = j
+    parts.append(audio[start * frame :])
+    return np.concatenate(parts)

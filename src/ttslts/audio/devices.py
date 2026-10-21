@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 
 import numpy as np
 
@@ -76,6 +77,7 @@ def stop() -> None:
 
 
 _STREAMS: set[SpeechStream] = set()
+END_SILENCE_S = 0.3  # added after the last piece of speech
 
 
 class SpeechStream:
@@ -114,10 +116,16 @@ class SpeechStream:
 
     def finish(self) -> None:
         with self._lock:
+            # a little silence at the end: the last word was heard cut and rushed, as the end of
+            # the speech was still in the device's buffer when the stream was closed
+            self._pieces.append(np.zeros(int(END_SILENCE_S * self.sr), dtype=np.float32))
             self._finished = True
 
         def close_when_played():  # not from PortAudio's own thread, which must not close it
             self.done.wait()
+            stream = self._stream
+            if stream is not None:  # what the device still holds is played out (MME: ~0.2 s)
+                time.sleep(float(getattr(stream, "latency", 0.0) or 0.0) + 0.1)
             self.stop()
 
         threading.Thread(target=close_when_played, daemon=True, name="speech-close").start()
