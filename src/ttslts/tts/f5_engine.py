@@ -28,6 +28,7 @@ log = logging.getLogger(__name__)
 # "mert" went missing (measured: 1 of 8 lost at 1.2, none at 1.1). Speed above this is made by
 # shortening the pauses between sentences instead.
 F5_MAX_SPEED = 1.1
+F5_SENTENCE_EXTRA_S = 0.2  # added to the pause after a sentence
 
 
 class F5Error(RuntimeError):
@@ -121,6 +122,9 @@ class F5Voice:
         gain = None
         pause = None
         chunks = join_short(split_with_pauses(text), LINE_PAUSE_S)
+        # F5's own silence at the end of a reading is trimmed (with it pauses ran to 1.6 s), so a
+        # sentence end gets a little more than Piper's pause: without it the sentences ran together
+        chunks = [(c, pause + F5_SENTENCE_EXTRA_S) for c, pause in chunks]
         f5_speed = min(speed, F5_MAX_SPEED)
         if self.part_bytes:  # long sentences in parts, each played as soon as it is read
             limit = int(self.part_bytes * f5_speed) - len(FILLER.encode("utf-8"))
