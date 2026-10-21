@@ -239,9 +239,13 @@ def test_speech_stream_plays_pieces_without_gaps(monkeypatch):
     assert out[:, 0].tolist() == [1, 1, 1, 2, 2]  # across the join
     stream._fill(out, 5, None, None)  # the next piece is not made yet: silence, no end
     assert out[:, 0].tolist() == [2, 2, 0, 0, 0]
-    stream.finish()
+    stream.finish()  # adds the end silence, then the stream stops
+    played = []
     with pytest.raises(FakeSd.CallbackStop):
-        stream._fill(out, 5, None, None)
+        for _ in range(100):
+            stream._fill(out, 5, None, None)
+            played += out[:, 0].tolist()
+    assert len(played) >= int(devices.END_SILENCE_S * 1000) - 5 and not any(played)
     stream.stop()
 
 
@@ -484,3 +488,20 @@ def test_a_vowel_start_is_cut_to_the_vowel():
     assert f5_text.vowel_onset(vowel, sr) == 0.0
     assert f5_text.starts_with_vowel("A tűzoltók") and not f5_text.starts_with_vowel("Zsófi a")
     assert f5_text.trim_leftover(audio, sr) == pytest.approx(0.29, abs=0.011)  # scrap + pause
+
+
+def test_silence_after_the_speech_is_trimmed():
+    sr = 1000
+    audio = np.concatenate([np.full(500, 0.5, np.float32), np.zeros(600, np.float32)])
+    assert f5_text.trailing_silence(audio, sr) == pytest.approx(0.55)
+    assert f5_text.trailing_silence(np.full(500, 0.5, np.float32), sr) == 0.0
+
+
+def test_long_pauses_inside_a_reading_are_shortened():
+    sr = 1000
+    word = np.full(300, 0.5, np.float32)
+    audio = np.concatenate([word, np.zeros(1600, np.float32), word])
+    out = f5_text.shorten_pauses(audio, sr)
+    assert len(out) == pytest.approx(300 + 600 + 300, abs=10)
+    short = np.concatenate([word, np.zeros(300, np.float32), word])
+    assert len(f5_text.shorten_pauses(short, sr)) == len(short)  # a normal pause stays
