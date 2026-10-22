@@ -505,3 +505,11 @@ def test_long_pauses_inside_a_reading_are_shortened():
     assert len(out) == pytest.approx(300 + 600 + 300, abs=10)
     short = np.concatenate([word, np.zeros(300, np.float32), word])
     assert len(f5_text.shorten_pauses(short, sr)) == len(short)  # a normal pause stays
+
+
+def test_a_short_first_word_is_not_taken_for_a_scrap():
+    sr = 1000
+    a_word = np.full(80, 0.4, np.float32)  # "A", then a small pause, then the next word
+    audio = np.concatenate([a_word, np.zeros(60, np.float32), np.full(400, 0.5, np.float32)])
+    assert f5_text.trim_leftover(audio, sr, text="A tűzoltók gyorsan") == 0.0
+    assert f5_text.trim_leftover(audio, sr, text="Reggelente a madarak") > 0.08  # a scrap there

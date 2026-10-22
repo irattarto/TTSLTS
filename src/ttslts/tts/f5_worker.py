@@ -198,7 +198,7 @@ class Reader:
             check = time.perf_counter() - t1
             wav = wav[int(cut * sr) :].copy()
             if filler:  # what is left of "nos" before the first word (heard as an "s")
-                wav = wav[int(trim_leftover(wav, sr) * sr) :].copy()
+                wav = wav[int(trim_leftover(wav, sr, text=text) * sr) :].copy()
                 if starts_with_vowel(text):  # all before the first vowel is filler leftover
                     wav = wav[int(vowel_onset(wav, sr) * sr) :].copy()
             if filler and ok:  # check the cut by listening to the new start

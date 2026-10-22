@@ -246,7 +246,7 @@ def joined_match(heard: str, target: str, first: str) -> bool:
     return difflib.SequenceMatcher(None, heard[: len(target)], target).ratio() >= 0.7
 
 
-def trim_leftover(audio, sr: int, window_s: float = 0.8) -> float:
+def trim_leftover(audio, sr: int, window_s: float = 0.8, text: str = "") -> float:
     """Seconds to cut off the start after the filler cut: what is left of "nos" before the first
     word. Two kinds were found: a faint hiss (about 45 dB under the speech, heard as an "s") and
     a short louder scrap followed by a gap. Cut to 30 ms before the first frame within 35 dB of
@@ -275,7 +275,10 @@ def trim_leftover(audio, sr: int, window_s: float = 0.8) -> float:
         k = j
         while k < n and not speech[k]:
             k += 1
-        if j - i <= 15 and k - j >= 4 and k < n:
+        # not when the text starts with a short word: "A" or "Az" and a small pause after it
+        # looked just like a scrap and was cut away ("A tűzoltók" read as "tűzoltók")
+        short_start = 0 < len(letters(first_word(text))) <= 2
+        if j - i <= 15 and k - j >= 4 and k < n and not short_start:
             i = k
     return max(0.0, (min(i, n) - 5) * 0.01)  # 50 ms kept: a soft "m" or "j" sounded cut
 
