@@ -3,7 +3,7 @@
 Protocol, one JSON object per line. In on stdin:
 
   {"op": "load", "model": ..., "vocab": ..., "ref_audio": ..., "ref_text": ..., "device": "cuda",
-   "whisper_dir": ...}
+   "whisper_dir": ..., "filler": true}
   {"op": "say", "text": "one sentence", "speed": 1.0, "seed": 3, "out": "x.npy"}
 
 out on stdout: {"type": "loaded", "device": ...}, {"type": "said", "out": ..., "sr": 24000,
@@ -86,6 +86,7 @@ class Reader:
         self.ref_text = reference_text(ref, self.vocab)
         self.ref_bytes = len(self.ref_text.encode("utf-8"))
         self.whisper_dir = msg.get("whisper_dir")
+        self.filler = msg.get("filler", True) is not False  # f5_voices.uses_filler
         self._asr = None
 
     def asr(self):
@@ -129,7 +130,7 @@ class Reader:
         # into parts here, so that every part gets the filler (F5's own parts each started with
         # a stray sound: "Igrandiózus")
         limit = int(self.ref_bytes / self.ref_seconds * (22 - self.ref_seconds) * speed)
-        parts = split_parts(text, limit - len(FILLER.encode("utf-8")))
+        parts = split_parts(text, limit - len(FILLER.encode("utf-8")) * self.filler)
         seed = int(msg.get("seed", 0))
         results = [self.read_part(part, seed + 100 * k, speed, msg) for k, part in enumerate(parts)]
         sr = results[0][3]
@@ -167,7 +168,10 @@ class Reader:
         readings = []
         # a word or two alone (Pronunciations > Listen): no filler. Whisper cannot tell such a
         # word from the filler in front of it, and the cut took most of the word away
-        filler = "" if len(text) < NO_FILLER_CHARS else FILLER
+        filler = FILLER if self.filler and len(text) >= NO_FILLER_CHARS else ""
+        # a voice without the filler: its start is still checked by listening, and read again
+        # when a stray sound comes before the first word
+        check_start = not self.filler and len(text) >= NO_FILLER_CHARS
         for attempt in range(TRIES):
             t0 = time.perf_counter()
             seed_everything(seed + 1000 * attempt)
@@ -201,7 +205,7 @@ class Reader:
                 wav = wav[int(trim_leftover(wav, sr, text=text) * sr) :].copy()
                 if starts_with_vowel(text):  # all before the first vowel is filler leftover
                     wav = wav[int(vowel_onset(wav, sr) * sr) :].copy()
-            if filler and ok:  # check the cut by listening to the new start
+            if (filler and ok) or check_start:  # check the cut by listening to the new start
                 after = self.words(wav, sr)
                 ok = starts_with_text(after, text)
                 if not ok:

@@ -20,6 +20,7 @@ from pathlib import Path
 import numpy as np
 
 from ttslts import paths
+from ttslts.tts import f5_voices
 
 log = logging.getLogger(__name__)
 
@@ -40,6 +41,7 @@ class F5Voice:
 
     def __init__(self, command: list[str], env: dict[str, str], files: dict[str, Path], gpu: bool):
         self.files = files
+        self.filler = f5_voices.uses_filler(files)
         self.sample_rate = 24000
         self._lock = threading.Lock()
         self._tmp = Path(tempfile.mkdtemp(prefix="ttslts-f5-"))
@@ -70,6 +72,7 @@ class F5Voice:
             ref_text=str(files["ref_text"]),
             device="cuda" if gpu else "cpu",
             whisper_dir=str(paths.models_dir() / "whisper"),
+            filler=self.filler,
         )
         self.device = reply.get("device", "cpu")
         self.part_bytes = int(reply.get("part_bytes", 0))  # 0: the worker cuts long ones itself
@@ -127,7 +130,7 @@ class F5Voice:
         chunks = [(c, pause + F5_SENTENCE_EXTRA_S) for c, pause in chunks]
         f5_speed = min(speed, F5_MAX_SPEED)
         if self.part_bytes:  # long sentences in parts, each played as soon as it is read
-            limit = int(self.part_bytes * f5_speed) - len(FILLER.encode("utf-8"))
+            limit = int(self.part_bytes * f5_speed) - len(FILLER.encode("utf-8")) * self.filler
             chunks = [
                 (part, pause_after if k == len(parts) - 1 else PART_PAUSE_S)
                 for sentence, pause_after in chunks

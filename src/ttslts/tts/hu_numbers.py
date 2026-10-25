@@ -36,6 +36,10 @@ _CURRENCY = {"Ft": "forint", "HUF": "forint", "€": "euró", "EUR": "euró", "$
 _NOT_NOUNS = {"és", "vagy", "meg", "is", "sem", "de", "illetve", "mint", "a", "az", "egy"}
 _VOWELS = set("aáeéiíoóöőuúüű")
 _BACK = set("aáoóuú")
+# a suffix with a linking vowel shortens these ("10-et" -> "tizet", "3-as" -> "hármas"); "-ig",
+# "-ért" do not ("tízig", "háromért")
+_STEM_BEFORE_VOWEL = {"tíz": "tiz", "húsz": "husz", "hét": "het", "három": "hárm"}
+_DAY_SUFFIXES = {"án", "én", "áig", "éig", "ától", "étől"}  # "7-én" -> "hetedikén"
 
 
 def _two(digit: int, short: bool) -> str:
@@ -150,6 +154,18 @@ def spell_numbers(text: str) -> str:
         nxt = re.match(r"\s([a-záéíóöőúüű]+)", m.string[m.end() :])
         return cardinal(int(digits), short_two=bool(nxt) and nxt.group(1) not in _NOT_NOUNS)
 
+    def suffixed(m):
+        n, suffix = int(m.group(1)), m.group(2)
+        if suffix.lower() in _DAY_SUFFIXES and 1 <= n <= 31:
+            return day(n, suffix)
+        words = cardinal(n)
+        if suffix[0] in "aeoö":
+            for end, stem in _STEM_BEFORE_VOWEL.items():
+                if words.endswith(end):
+                    words = words[: -len(end)] + stem
+                    break
+        return words + suffix
+
     def numeric_date(m):
         month = int(m.group(2))
         if not 1 <= month <= 12:
@@ -162,7 +178,7 @@ def spell_numbers(text: str) -> str:
     text = _MONTH_DAY.sub(lambda m: f"{m.group(1)} {day(int(m.group(2)), m.group(3) or '')}", text)
     text = _TIME.sub(
         lambda m: (
-            f"{cardinal(int(m.group(1)))} óra"
+            f"{cardinal(int(m.group(1)), True)} óra"
             + (f" {cardinal(int(m.group(2)))}" if int(m.group(2)) else "")
             + (m.group(3) or "")  # "10:30-kor" -> "... harminckor", "10:00-kor" -> "órakor"
         ),
@@ -180,6 +196,6 @@ def spell_numbers(text: str) -> str:
     )  # "2-3 nap" -> "két-három nap" (the second number is spelt below)
     text = _ORDINAL.sub(lambda m: ordinal(int(m.group(1))), text)
     text = _SIGNED.sub(lambda m: "mínusz " + m.group(1), text)
-    text = _SUFFIXED.sub(lambda m: cardinal(int(m.group(1))) + m.group(2), text)
+    text = _SUFFIXED.sub(suffixed, text)
     text = _NUMBER.sub(number, text)
     return re.sub(r"[ \t]{2,}", " ", text).strip()
