@@ -65,6 +65,17 @@ def test_adding_an_f5_voice(tmp_path):
     assert files["ref_text"].read_text(encoding="utf-8") == "Jól látták."
     assert f5_voices.display_name(voice_id) == "galambos (own F5 voice)"
     assert f5_voices.is_f5(voice_id) and not f5_voices.is_f5("hu_HU-imre-medium")
+    assert f5_voices.uses_filler(files)  # no voice.json: the filler as before
+
+
+def test_a_voice_can_go_without_the_filler(tmp_path):
+    model = make_voice_folder(tmp_path)
+    (model.parent / "voice.json").write_text('{"filler": false}', encoding="utf-8")
+    base = tmp_path / "models"
+    files = f5_voices.voice_files(f5_voices.add_voice(model, base), base)
+    assert not f5_voices.uses_filler(files)  # copied along with the voice
+    files["options"].write_text("not json", encoding="utf-8")
+    assert f5_voices.uses_filler(files)
 
 
 def test_an_f5_voice_needs_its_sample_and_text(tmp_path):

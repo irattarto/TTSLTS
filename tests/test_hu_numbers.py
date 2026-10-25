@@ -63,6 +63,10 @@ def test_days_of_the_month():
         ("2001-ben, 5-öt", "kétezer-egyben, ötöt"),
         ("Május 1. ünnep.", "Május elseje ünnep."),
         ("€20", "húsz euró"),
+        ("10-et, 3-as, 7-en, 20-at, 17-et", "tizet, hármas, heten, huszat, tizenhetet"),
+        ("10-ig, 3-ért, 5-öt", "tízig, háromért, ötöt"),
+        ("7-én este", "hetedikén este"),
+        ("12:30-kor", "tizenkét óra harminckor"),
         ("Ez 5.", "Ez öt."),
     ],
 )
