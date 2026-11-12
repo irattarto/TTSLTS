@@ -17,7 +17,7 @@ from PySide6.QtCore import QObject, Signal
 
 from ttslts import onnx_util, paths
 from ttslts.audio import devices
-from ttslts.audio.wav import write_wav
+from ttslts.audio.wav import write_audio
 from ttslts.gpu_memory import GpuMemoryGate
 from ttslts.settings import Settings
 
@@ -600,7 +600,7 @@ class Controller(QObject):
             try:
                 with self._tts_lock:
                     audio, sr = self.render_tts(text)
-                write_wav(path, audio, sr)
+                write_audio(path, audio, sr)
                 self.status.emit(f"Saved {path}")
             finally:
                 self.ttsBusy.emit(False)

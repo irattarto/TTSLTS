@@ -68,7 +68,7 @@ TIPS = {
     ),
     "speak_btn": "Read the text aloud now.",
     "stop_btn": "Stop the speech that is playing.",
-    "save_btn": "Save the speech as a WAV file instead of playing it.",
+    "save_btn": "Save the speech as an MP3 or WAV file instead of playing it.",
     "pron_btn": (
         "Words the voice says wrongly: write them the way they sound and the voice uses that "
         "instead. You can also select a word in the text and right-click it."
@@ -240,7 +240,7 @@ class MainWindow(QMainWindow):
         self.speak_btn.clicked.connect(self._speak)
         self.stop_btn = QPushButton("Stop")
         self.stop_btn.clicked.connect(self.controller.stop_speaking)
-        self.save_btn = QPushButton("Save WAV…")
+        self.save_btn = QPushButton("Save…")
         self.save_btn.clicked.connect(self._save_wav)
         self.pron_btn = QPushButton("Pronunciations…")
         self.pron_btn.clicked.connect(lambda: self._edit_pronunciations())
@@ -648,8 +648,13 @@ class MainWindow(QMainWindow):
         return edit
 
     def _save_wav(self) -> None:
-        path, _ = QFileDialog.getSaveFileName(self, "Save speech", "speech.wav", "WAV (*.wav)")
+        path, chosen = QFileDialog.getSaveFileName(
+            self, "Save speech", "speech.mp3", "MP3 (*.mp3);;WAV (*.wav)"
+        )
         if path:
+            ext = ".wav" if chosen.startswith("WAV") else ".mp3"
+            if Path(path).suffix.lower() not in (".mp3", ".wav"):
+                path += ext
             self.controller.save_wav(self.text_edit.toPlainText(), path)
 
     def _show_error(self, message: str) -> None:
