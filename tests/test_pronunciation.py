@@ -116,3 +116,25 @@ def test_window_saves_the_dictionary(monkeypatch, app):
     window.close()
     window.deleteLater()
     app.processEvents()
+
+
+def test_listen_says_the_second_column_as_written(monkeypatch):
+    from ttslts.controller import Controller
+    from ttslts.settings import Settings
+    from ttslts.tts import pronunciation
+
+    controller = Controller(Settings(), save=lambda s: None)
+    got = []
+
+    class Voice:
+        def synthesize(self, text, *args, **kw):
+            got.append(text)
+            import numpy as np
+
+            return np.zeros(10, np.float32), 22050
+
+    monkeypatch.setattr(controller, "piper", lambda: Voice())
+    monkeypatch.setattr(pronunciation, "load", lambda: [pronunciation.Entry("EF", "É-ef", False)])
+    controller.render_tts("ef bí áj", as_written=True)
+    controller.render_tts("ef bí áj")
+    assert got == ["ef bí áj", "É-ef bí áj"]

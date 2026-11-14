@@ -480,12 +480,16 @@ class Controller(QObject):
         text: str,
         cancelled: Callable[[], bool] | None = None,
         progress: Callable[[int, int], None] | None = None,
+        as_written: bool = False,
     ) -> tuple[np.ndarray, int]:
-        """The whole speech for ``text``; ``progress(n, total)`` before each F5 sentence."""
+        """The whole speech for ``text``; ``progress(n, total)`` before each F5 sentence.
+        ``as_written``: no pronunciation list applied (Pronunciations > Listen says the row's
+        second column itself: a row "EF" -> "É-ef" turned its "ef bí áj" into "É-ef bí áj")."""
         from ttslts.tts import f5_voices, pronunciation
 
         s = self.settings
-        text = pronunciation.apply_for(text, "hu", s.pron_builtin)
+        if not as_written:
+            text = pronunciation.apply_for(text, "hu", s.pron_builtin)
         if f5_voices.is_f5(s.piper_voice):
             return self.f5().synthesize(text, s.tts_speed, cancelled, progress=progress)
         audio, sr = self.piper().synthesize(
@@ -524,7 +528,7 @@ class Controller(QObject):
 
         threading.Thread(target=wait, daemon=True, name="tts-played").start()
 
-    def speak(self, text: str) -> None:
+    def speak(self, text: str, as_written: bool = False) -> None:
         generation = self._tts_generation
         job = self._new_tts_job()
 
@@ -535,10 +539,12 @@ class Controller(QObject):
                     if generation != self._tts_generation:
                         return  # stopped before it started
                     self.status.emit("Synthesizing…")
-                    if self._speak_f5_streamed(text, generation, job):
+                    if self._speak_f5_streamed(text, generation, job, as_written):
                         return
                     audio, sr = self.render_tts(
-                        text, cancelled=lambda: generation != self._tts_generation
+                        text,
+                        cancelled=lambda: generation != self._tts_generation,
+                        as_written=as_written,
                     )
                     if generation != self._tts_generation:
                         self.status.emit("Stopped")
@@ -554,7 +560,9 @@ class Controller(QObject):
 
         self._background(work, "tts")
 
-    def _speak_f5_streamed(self, text: str, generation: int, job: int = 0) -> bool:
+    def _speak_f5_streamed(
+        self, text: str, generation: int, job: int = 0, as_written: bool = False
+    ) -> bool:
         """Read with an F5 voice, playing each sentence as soon as it is made (F5 takes a few
         seconds per sentence; the whole text first would mean a long silence). False when the
         chosen voice is not an F5 voice."""
@@ -568,7 +576,7 @@ class Controller(QObject):
             return generation != self._tts_generation
 
         voice = self.f5()
-        prepared = pronunciation.apply_for(text, "hu", s.pron_builtin)
+        prepared = text if as_written else pronunciation.apply_for(text, "hu", s.pron_builtin)
         stream = None
         waiting: list[np.ndarray] = []  # made before playback starts
         expected_s = len(prepared) * F5_SECONDS_PER_CHAR / max(s.tts_speed, 0.1)

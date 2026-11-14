@@ -76,3 +76,33 @@ def test_tray_menu_entries_have_tooltips(window):
     actions = [a for a in tray._menu.actions() if not a.isSeparator()]
     assert len(actions) == 5 and all(a.toolTip() for a in actions)
     assert tray._menu.toolTipsVisible()
+
+
+def test_list_and_table_hover_help_stays_over_their_items():
+    # a view hid its own tooltip at once over an item without one: it only flashed up
+    from PySide6.QtGui import QHelpEvent
+    from PySide6.QtWidgets import QToolTip
+
+    from ttslts.tts.pronunciation import Entry
+    from ttslts.ui.pronunciation_dialog import PronunciationDialog
+
+    QApplication.instance() or QApplication([])
+    dialog = PronunciationDialog(None, [Entry("EF", "É-ef", False)], True, listen=lambda t: None)
+    dialog.show()
+    table = dialog.table
+    assert all(table.horizontalHeaderItem(c).toolTip() for c in range(3))
+    rect = table.visualItemRect(table.item(0, 2))
+    pos = rect.center()
+    event = QHelpEvent(QHelpEvent.Type.ToolTip, pos, table.viewport().mapToGlobal(pos))
+    QApplication.sendEvent(table.viewport(), event)
+    assert QToolTip.isVisible() and "Match case" in QToolTip.text()
+    QToolTip.hideText()
+    dialog.close()
+    dialog.deleteLater()
+
+
+def test_train_file_list_keeps_its_hover_help(window):
+    from ttslts.ui import hover
+
+    filters = window.train_files.viewport().findChildren(hover._ViewTooltip)
+    assert filters or any(isinstance(c, hover._ViewTooltip) for c in window.train_files.children())

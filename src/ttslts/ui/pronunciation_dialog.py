@@ -18,11 +18,21 @@ from PySide6.QtWidgets import (
 )
 
 from ttslts.tts.pronunciation import BUILTIN_HU, Entry
+from ttslts.ui.hover import keep_view_tooltip
 
 HELP = (
     "Write each word the way it sounds in the language of the text, using that language's "
     "spelling. Examples (Hungarian): Windows -> vindóz, Nvidia -> envídia, TTSLTS -> té té esz "
     "el té esz."
+)
+MATCH_CASE_HELP = (
+    "Match case: tick it for a word written in capitals (EF, IT), so the same letters in lower "
+    'case ("ef", "it") stay as they are. Without it every spelling of the word is replaced.'
+)
+COLUMN_TIPS = (
+    "The word as it is written in the text (a whole word)",
+    "How to say it, written with the spelling of the text's language",
+    "On: only this exact capitalisation is replaced (EF, not ef). Off: every spelling.",
 )
 
 
@@ -43,9 +53,14 @@ class PronunciationDialog(QDialog):
         intro = QLabel(HELP)
         intro.setWordWrap(True)
         layout.addWidget(intro)
+        case_help = QLabel(MATCH_CASE_HELP)
+        case_help.setWordWrap(True)
+        layout.addWidget(case_help)
 
         self.table = QTableWidget(0, 3)
         self.table.setHorizontalHeaderLabels(["Written as", "Say it as", "Match case"])
+        for column, tip in enumerate(COLUMN_TIPS):
+            self.table.horizontalHeaderItem(column).setToolTip(tip)
         self.table.horizontalHeader().setStretchLastSection(True)
         self.table.setColumnWidth(0, 170)
         self.table.setColumnWidth(1, 200)
@@ -54,6 +69,7 @@ class PronunciationDialog(QDialog):
             "second column instead. With Match case on, only that exact capitalisation counts "
             "(IT, not it)."
         )
+        keep_view_tooltip(self.table)
         layout.addWidget(self.table, 1)
         for e in entries:
             self._add_row(e.word, e.say, e.match_case)
@@ -71,8 +87,8 @@ class PronunciationDialog(QDialog):
         remove.clicked.connect(self._remove_selected)
         listen_btn = QPushButton("Listen")
         listen_btn.setToolTip(
-            "Speak the selected row's second column with the voice chosen on the Text to Speech "
-            "tab, to check how it sounds"
+            "Speak the selected row's second column exactly as written (no list applied to it) "
+            "with the voice chosen on the Text to Speech tab, to check how it sounds"
         )
         listen_btn.clicked.connect(self._on_listen)
         for b in (add, remove, listen_btn):

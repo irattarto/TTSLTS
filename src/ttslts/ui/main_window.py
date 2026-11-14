@@ -44,6 +44,7 @@ from ttslts.tts.piper_download import (
     HELP_VOICE,
     HINT,
 )
+from ttslts.ui.hover import keep_view_tooltip
 
 DEFAULT_DEVICE = "System default"
 
@@ -334,6 +335,7 @@ class MainWindow(QMainWindow):
         self.train_files = QListWidget()
         self.train_files.setSelectionMode(QListWidget.SelectionMode.ExtendedSelection)
         self.train_files.setMinimumHeight(70)
+        keep_view_tooltip(self.train_files)
         layout.addWidget(self.train_files, 1)
         file_buttons = QHBoxLayout()
         self.train_add_btn = QPushButton("Add recordings…")
@@ -702,7 +704,7 @@ class MainWindow(QMainWindow):
             self,
             pronunciation.load(),
             self.settings.pron_builtin,
-            listen=self.controller.speak,
+            listen=lambda text: self.controller.speak(text, as_written=True),
             word=word,
         )
         if dialog.exec():
