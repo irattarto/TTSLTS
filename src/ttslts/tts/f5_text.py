@@ -230,9 +230,24 @@ def short_filler_cut(words: list[tuple[str, float, float]], onset: float) -> flo
     return None
 
 
+def filler_joined(words: list[tuple[str, float, float]]) -> bool:
+    """Whether Whisper heard "nos" run into the next word ("Anosvinetú"): then there is no comma
+    pause after it to find, and a pause inside the word was taken for one ("vinetu" -> "tu")."""
+    return bool(words) and bool(re.search(r"nos[a-záéíóöőúüű]{2,}", letters(words[0][0])))
+
+
+def heard_enough(words: list[tuple[str, float, float]], text: str) -> bool:
+    """After cutting a word or two: whether Whisper still hears at least half as many letters as
+    the text has. Their spelling is not compared ("ef bí áj" is heard "FBI"), but a cut that kept
+    only the end of the word ("vinetu" -> "Tu") fails."""
+    heard = sum(len(letters(w)) for w, _, _ in words)
+    return heard >= 0.5 * len(letters(text))
+
+
 def pause_cut(audio, sr: int) -> float | None:
     """End of the comma pause after "nos" (60 ms or more at -30 dB under the peak, starting
-    0.2-1.3 s after the speech starts), kept to 30 ms before the word; None if there is none."""
+    0.15-0.9 s after the speech starts), kept to 30 ms before the word; None if there is none.
+    Not later: a pause inside the word was taken for it ("vinetu" kept only "tu")."""
     import numpy as np
 
     frame = max(1, int(0.01 * sr))
@@ -243,7 +258,7 @@ def pause_cut(audio, sr: int) -> float | None:
     quiet = level < level.max() * 10 ** (-30 / 20)
     onset = int(round(leading_silence(audio, sr) / 0.01)) + 5
     i = onset + 15
-    while i < min(n, onset + 130):
+    while i < min(n, onset + 90):
         if not quiet[i]:
             i += 1
             continue

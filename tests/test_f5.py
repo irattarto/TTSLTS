@@ -690,3 +690,27 @@ def test_strict_start_is_a_voice_option(tmp_path):
     assert f5_voices.strict_start(files) and f5_voices.uses_filler(files)
     files["options"].write_text("[1]", encoding="utf-8")
     assert not f5_voices.strict_start(files) and f5_voices.uses_filler(files)
+
+
+def test_a_pause_inside_the_word_is_not_taken_for_the_one_after_nos():
+    sr = 24000
+    t = np.arange(sr * 2) / sr
+    tone = (0.5 * np.sin(2 * np.pi * 200 * t)).astype(np.float32)
+    silent = np.zeros(int(0.1 * sr), np.float32)
+    # "nosvine" said in one go (1.2 s), then a pause, then "tu": no comma pause to cut at
+    audio = np.concatenate([silent, tone[: int(1.2 * sr)], silent, tone[: int(0.3 * sr)]])
+    assert f5_text.pause_cut(audio, sr) is None
+
+
+def test_a_cut_word_is_noticed_by_how_much_is_heard():
+    assert not f5_text.heard_enough([(" Tu?", 0.1, 0.3)], "vinetu")
+    assert f5_text.heard_enough([(" FBI", 0.1, 0.6)], "ef bí áj")  # spelled differently: fine
+    assert f5_text.heard_enough([(" Csuk!", 0.1, 0.4)], "tyúk")
+    assert not f5_text.heard_enough([], "igen")
+
+
+def test_nos_run_into_the_word_is_noticed():
+    assert f5_text.filler_joined([(" Anosvinetú", 0.0, 0.9)])
+    assert not f5_text.filler_joined([(" Anos", 0.0, 0.4), (" vinetu", 0.5, 0.9)])
+    assert not f5_text.filler_joined([(" Onnos,", 0.0, 0.4)])
+    assert not f5_text.filler_joined([])

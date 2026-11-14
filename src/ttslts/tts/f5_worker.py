@@ -154,6 +154,8 @@ class Reader:
             NO_FILLER_CHARS,
             SHORT_MIN_S,
             filler_cut,
+            filler_joined,
+            heard_enough,
             held_vowel_onset,
             is_lively,
             keep_enough,
@@ -203,11 +205,18 @@ class Reader:
                 print(
                     "heard: " + " ".join(f"{w}@{s:.2f}" for w, s, _ in words[:5]), file=sys.stderr
                 )
-                cut = short_filler_cut(words, leading_silence(wav, sr))
-                if cut is None:
+                onset = leading_silence(wav, sr)
+                cut = short_filler_cut(words, onset)
+                if cut is None and not filler_joined(words):
                     cut = pause_cut(wav, sr)
-                ok = cut is not None  # else read again; kept whole ("nos" and all) if never found
-                cut = cut or 0.0
+                if cut is not None and keep_enough(cut, len(wav) / sr, text) != cut:
+                    cut = None  # it would take most of the text away: a pause inside a word
+                ok = cut is not None  # else read again
+                if cut is None:  # where "nos, " should end by the voice's own pace
+                    per_byte = self.ref_seconds / self.ref_bytes / max(speed, 0.1)
+                    cut = keep_enough(
+                        onset + per_byte * len(FILLER.encode("utf-8")), len(wav) / sr, text
+                    )
             elif filler:
                 words = self.words(wav, sr)
                 print(
@@ -237,6 +246,12 @@ class Reader:
             if (filler and ok and not short) or check_start:  # listen to the new start
                 after = self.words(wav, sr)
                 ok = starts_with_text(after, text)
+                if not ok:
+                    print("after the cut: " + " ".join(w for w, _, _ in after[:3]), file=sys.stderr)
+            elif filler and ok and short:  # nothing of the word cut away with the filler
+                pad = np.zeros(sr // 4, dtype=np.float32)
+                after = self.words(np.concatenate([pad, wav, pad]), sr)
+                ok = heard_enough(after, text)
                 if not ok:
                     print("after the cut: " + " ".join(w for w, _, _ in after[:3]), file=sys.stderr)
             # with the filler: fade in over the 50 ms kept before the word, so a faint "s" left
