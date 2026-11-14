@@ -151,11 +151,14 @@ class Reader:
             FILLER,
             FILLER_MAX_S,
             NO_FILLER_CHARS,
+            SHORT_MIN_S,
             filler_cut,
             is_lively,
             keep_enough,
             leading_silence,
             melody_range,
+            pause_cut,
+            short_filler_cut,
             shorten_pauses,
             starts_with_text,
             starts_with_vowel,
@@ -166,12 +169,21 @@ class Reader:
 
         np = self.np
         readings = []
-        # a word or two alone (Pronunciations > Listen): no filler. Whisper cannot tell such a
-        # word from the filler in front of it, and the cut took most of the word away
-        filler = FILLER if self.filler and len(text) >= NO_FILLER_CHARS else ""
+        # a word or two alone (Pronunciations > Listen): F5 gets more time for it (its own ~0.9 s
+        # gave a stray vowel and a scrap, or noise), and the filler is cut where Whisper hears the
+        # next word after "nos", or at the comma's pause: the word itself is not looked for, as
+        # Whisper hears a lone spelled-out word as anything ("écsbí ó" -> "HBU")
+        short = len(text) < NO_FILLER_CHARS
+        filler = FILLER if self.filler else ""
+        fix_duration = None
+        if short:
+            per_byte = self.ref_seconds / self.ref_bytes / max(speed, 0.1)
+            natural = per_byte * len((filler + text).encode("utf-8"))
+            least = per_byte * len(filler.encode("utf-8")) + SHORT_MIN_S
+            fix_duration = self.ref_seconds + max(natural, least)
         # a voice without the filler: its start is still checked by listening, and read again
         # when a stray sound comes before the first word
-        check_start = not self.filler and len(text) >= NO_FILLER_CHARS
+        check_start = not self.filler and not short
         for attempt in range(TRIES):
             t0 = time.perf_counter()
             seed_everything(seed + 1000 * attempt)
@@ -179,11 +191,21 @@ class Reader:
                 self.ref_audio, self.ref_text, filler + text, self.model.ema_model,
                 self.model.vocoder, self.model.mel_spec_type, show_info=lambda *a: None,
                 speed=speed, nfe_step=int(msg.get("nfe", 32)),
-                device=self.device,
+                device=self.device, fix_duration=fix_duration,
             )  # fmt: skip
             wav = np.asarray(wav, dtype=np.float32)
             t1 = time.perf_counter()
-            if filler:
+            if filler and short:
+                words = self.words(wav, sr)
+                print(
+                    "heard: " + " ".join(f"{w}@{s:.2f}" for w, s, _ in words[:5]), file=sys.stderr
+                )
+                cut = short_filler_cut(words, leading_silence(wav, sr))
+                if cut is None:
+                    cut = pause_cut(wav, sr)
+                ok = cut is not None  # else read again; kept whole ("nos" and all) if never found
+                cut = cut or 0.0
+            elif filler:
                 words = self.words(wav, sr)
                 print(
                     "heard: " + " ".join(f"{w}@{s:.2f}" for w, s, _ in words[:5]), file=sys.stderr
@@ -205,7 +227,7 @@ class Reader:
                 wav = wav[int(trim_leftover(wav, sr, text=text) * sr) :].copy()
                 if starts_with_vowel(text):  # all before the first vowel is filler leftover
                     wav = wav[int(vowel_onset(wav, sr) * sr) :].copy()
-            if (filler and ok) or check_start:  # check the cut by listening to the new start
+            if (filler and ok and not short) or check_start:  # listen to the new start
                 after = self.words(wav, sr)
                 ok = starts_with_text(after, text)
                 if not ok:

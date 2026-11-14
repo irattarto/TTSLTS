@@ -208,7 +208,52 @@ def keep_enough(cut: float, length_s: float, text: str) -> float:
     return max(0.0, length_s - 0.5 * expected)
 
 
-NO_FILLER_CHARS = 20  # shorter texts are read without the filler (and nothing is cut)
+NO_FILLER_CHARS = 20  # shorter texts: the filler is cut by short_filler_cut, not filler_cut
+# a word or two alone (Pronunciations > Listen) got ~0.9 s from F5 and came out as a stray vowel
+# and a scrap, or as noise; with at least this long for the text the word is said whole
+SHORT_MIN_S = 1.5
+
+
+def short_filler_cut(words: list[tuple[str, float, float]], onset: float) -> float | None:
+    """Where the word after the filler starts, for a text of a word or two: 30 ms before the word
+    Whisper hears right after "nos" ("Anos", "Ennos,", "no"). The text's own word cannot be
+    looked for, as a short or spelled-out one ("écsbí ó") is heard as anything ("HBU"). None
+    when "nos" is not heard as a word of its own within FILLER_MAX_S of the speech ``onset``."""
+    for (word, start, _end), after in zip(words, words[1:], strict=False):
+        if start > onset + FILLER_MAX_S:
+            break
+        heard = letters(word)
+        if re.search(r"no(s|sz)?$", heard):
+            return max(0.0, after[1] - 0.03)
+        if "nos" in heard:  # joined with the word ("Enosvinetú"): no time to cut at
+            return None
+    return None
+
+
+def pause_cut(audio, sr: int) -> float | None:
+    """End of the comma pause after "nos" (60 ms or more at -30 dB under the peak, starting
+    0.2-1.3 s after the speech starts), kept to 30 ms before the word; None if there is none."""
+    import numpy as np
+
+    frame = max(1, int(0.01 * sr))
+    n = len(audio) // frame
+    if n == 0:
+        return None
+    level = np.sqrt((np.asarray(audio[: n * frame]).reshape(n, frame) ** 2).mean(axis=1))
+    quiet = level < level.max() * 10 ** (-30 / 20)
+    onset = int(round(leading_silence(audio, sr) / 0.01)) + 5
+    i = onset + 15
+    while i < min(n, onset + 130):
+        if not quiet[i]:
+            i += 1
+            continue
+        j = i
+        while j < n and quiet[j]:
+            j += 1
+        if j - i >= 6 and j < n:
+            return max(0.0, j * 0.01 - 0.03)
+        i = j
+    return None
 
 
 def leading_silence(audio, sr: int) -> float:
