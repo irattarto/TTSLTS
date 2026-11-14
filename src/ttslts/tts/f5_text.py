@@ -328,6 +328,57 @@ def trim_leftover(audio, sr: int, window_s: float = 0.8, text: str = "") -> floa
     return max(0.0, (min(i, n) - 5) * 0.01)  # 50 ms kept: a soft "m" or "j" sounded cut
 
 
+def _start_frames(audio, sr: int, window_s: float = 0.8):
+    """Per 10 ms frame of the start: dB under the loudest frame of the whole reading, and the
+    share of sound under 1 kHz (vowels and voiced sounds), plus the number of frames looked at."""
+    import numpy as np
+
+    frame = int(0.01 * sr)
+    n_all = len(audio) // frame
+    frames = np.asarray(audio[: n_all * frame], dtype=np.float32).reshape(n_all, frame)
+    level = 10 * np.log10((frames**2).mean(axis=1) + 1e-12)
+    n = min(n_all, int(window_s / 0.01))
+    spec = np.abs(np.fft.rfft(frames[:n] * np.hanning(frame), axis=1)) ** 2
+    low = spec[:, np.fft.rfftfreq(frame, 1 / sr) < 1000].sum(axis=1) / (spec.sum(axis=1) + 1e-12)
+    return (level - level.max())[:n], low, n
+
+
+def held_vowel_onset(audio, sr: int, hold: int = 5) -> float:
+    """Strict start cleaning, text starting with a vowel: where a real vowel starts - loud (within
+    20 dB of the loudest), mostly under 1 kHz and held for 50 ms. voice2's filler left a loud hiss or
+    a murmur of 20-90 ms in front that ``vowel_onset`` took for the vowel ("picike hang előtte")."""
+    if len(audio) < 5 * int(0.01 * sr):
+        return 0.0
+    level, low, n = _start_frames(audio, sr)
+    vowel = (level > -20) & (low > 0.6)
+    for i in range(n - hold):
+        if vowel[i : i + hold].all():
+            return i * 0.01
+    return 0.0
+
+
+def loud_scrap_end(audio, sr: int) -> float:
+    """Strict start cleaning, text starting with a consonant: a scrap (within 30 dB of the
+    loudest, up to 200 ms) then 40 ms quieter, then the word: the scrap is the filler's "s"
+    ("Styúk"), louder in voice2 than ``trim_leftover`` expects. Cut to 30 ms before the word."""
+    if len(audio) < 5 * int(0.01 * sr):
+        return 0.0
+    level, _low, n = _start_frames(audio, sr)
+    loud = level > -30
+    i = 0
+    while i < n and not loud[i]:
+        i += 1
+    j = i
+    while j < n and loud[j]:
+        j += 1
+    k = j
+    while k < n and not loud[k]:
+        k += 1
+    if j - i <= 20 and k - j >= 4 and k < n:
+        return max(0.0, (k - 3) * 0.01)
+    return 0.0
+
+
 PART_PAUSE_S = 0.12  # between the parts of a long sentence (they are cut at a comma or a dash)
 
 

@@ -87,6 +87,7 @@ class Reader:
         self.ref_bytes = len(self.ref_text.encode("utf-8"))
         self.whisper_dir = msg.get("whisper_dir")
         self.filler = msg.get("filler", True) is not False  # f5_voices.uses_filler
+        self.strict_start = msg.get("strict_start") is True  # f5_voices.strict_start
         self._asr = None
 
     def asr(self):
@@ -153,9 +154,11 @@ class Reader:
             NO_FILLER_CHARS,
             SHORT_MIN_S,
             filler_cut,
+            held_vowel_onset,
             is_lively,
             keep_enough,
             leading_silence,
+            loud_scrap_end,
             melody_range,
             pause_cut,
             short_filler_cut,
@@ -227,6 +230,10 @@ class Reader:
                 wav = wav[int(trim_leftover(wav, sr, text=text) * sr) :].copy()
                 if starts_with_vowel(text):  # all before the first vowel is filler leftover
                     wav = wav[int(vowel_onset(wav, sr) * sr) :].copy()
+                if self.strict_start:  # a loud "s" or breath of the filler still in front
+                    vowel = starts_with_vowel(text)
+                    more = held_vowel_onset(wav, sr) if vowel else loud_scrap_end(wav, sr)
+                    wav = wav[int(more * sr) :].copy()
             if (filler and ok and not short) or check_start:  # listen to the new start
                 after = self.words(wav, sr)
                 ok = starts_with_text(after, text)

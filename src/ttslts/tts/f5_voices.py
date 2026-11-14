@@ -7,7 +7,9 @@ An F5 voice is a folder ``<models>/f5/<name>/`` with
 * ``reference.wav``     - a calm 5-15 s sample of the voice the model reads with,
 * ``reference.txt``     - the exact text of that sample,
 * ``voice.json``        - optional: ``{"filler": false}`` for a voice trained on clips cut close
-  to the words, which starts cleanly without the "nos, " filler read in front and cut off.
+  to the words, which starts cleanly without the "nos, " filler read in front and cut off;
+  ``{"strict_start": true}`` for a voice that leaves a loud bit of the filler ("s", a breath)
+  before the first word (voice2): see ``f5_text.held_vowel_onset`` and ``loud_scrap_end``.
 
 No F5 voice is downloaded or shipped: the Hungarian F5 base model is licensed for non-commercial
 use only (CC BY-NC 4.0), so voices are only ever added by the user, from their own files.
@@ -55,14 +57,23 @@ def voice_files(voice_id: str, base: Path | None = None) -> dict[str, Path]:
     return files
 
 
-def uses_filler(files: dict[str, Path]) -> bool:
-    """Whether the voice reads the "nos, " filler in front (see ``OPTIONS``); yes by default."""
+def _options(files: dict[str, Path]) -> dict:
     path = files.get("options")
     try:
         options = json.loads(path.read_text(encoding="utf-8")) if path else {}
     except (OSError, ValueError):
-        return True
-    return not isinstance(options, dict) or options.get("filler", True) is not False
+        return {}
+    return options if isinstance(options, dict) else {}
+
+
+def uses_filler(files: dict[str, Path]) -> bool:
+    """Whether the voice reads the "nos, " filler in front (see ``OPTIONS``); yes by default."""
+    return _options(files).get("filler", True) is not False
+
+
+def strict_start(files: dict[str, Path]) -> bool:
+    """Whether the start after the filler cut is cleaned the strict way (see ``OPTIONS``)."""
+    return _options(files).get("strict_start") is True
 
 
 def installed_voices(base: Path | None = None) -> list[str]:

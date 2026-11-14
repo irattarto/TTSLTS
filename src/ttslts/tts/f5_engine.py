@@ -42,6 +42,7 @@ class F5Voice:
     def __init__(self, command: list[str], env: dict[str, str], files: dict[str, Path], gpu: bool):
         self.files = files
         self.filler = f5_voices.uses_filler(files)
+        self.strict_start = f5_voices.strict_start(files)
         self.sample_rate = 24000
         self._lock = threading.Lock()
         self._tmp = Path(tempfile.mkdtemp(prefix="ttslts-f5-"))
@@ -73,6 +74,7 @@ class F5Voice:
             device="cuda" if gpu else "cpu",
             whisper_dir=str(paths.models_dir() / "whisper"),
             filler=self.filler,
+            strict_start=self.strict_start,
         )
         self.device = reply.get("device", "cpu")
         self.part_bytes = int(reply.get("part_bytes", 0))  # 0: the worker cuts long ones itself

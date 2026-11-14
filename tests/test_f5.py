@@ -655,3 +655,38 @@ def test_pause_after_nos_is_found_by_loudness():
     audio = np.concatenate([silent, tone[: int(0.4 * sr)], silent, tone[: int(0.5 * sr)]])
     assert f5_text.pause_cut(audio, sr) == pytest.approx(0.6 - 0.03, abs=0.015)
     assert f5_text.pause_cut(np.concatenate([silent, tone]), sr) is None  # no pause
+
+
+def _tone(sr, seconds, freq, amp):
+    t = np.arange(int(seconds * sr)) / sr
+    return (amp * np.sin(2 * np.pi * freq * t)).astype(np.float32)
+
+
+def test_strict_start_finds_the_held_vowel_after_a_loud_hiss():
+    sr = 24000
+    rng = np.random.default_rng(0)
+    hiss = (0.1 * rng.standard_normal(int(0.04 * sr))).astype(np.float32)  # loud "s", ~-14 dB
+    blip = _tone(sr, 0.02, 150, 0.5)  # a murmur too short to be the vowel
+    quiet = np.zeros(int(0.05 * sr), np.float32)
+    audio = np.concatenate([hiss, blip, quiet, _tone(sr, 0.4, 150, 0.5)])
+    assert f5_text.held_vowel_onset(audio, sr) == pytest.approx(0.11, abs=0.011)
+    assert f5_text.held_vowel_onset(_tone(sr, 0.4, 150, 0.5), sr) == 0.0  # clean: nothing
+
+
+def test_strict_start_skips_a_loud_s_before_a_consonant():
+    sr = 24000
+    rng = np.random.default_rng(1)
+    hiss = (0.1 * rng.standard_normal(int(0.15 * sr))).astype(np.float32)
+    gap = (0.001 * rng.standard_normal(int(0.07 * sr))).astype(np.float32)
+    audio = np.concatenate([hiss, gap, _tone(sr, 0.4, 150, 0.5)])
+    assert f5_text.loud_scrap_end(audio, sr) == pytest.approx(0.22 - 0.03, abs=0.011)
+    assert f5_text.loud_scrap_end(_tone(sr, 0.4, 150, 0.5), sr) == 0.0
+
+
+def test_strict_start_is_a_voice_option(tmp_path):
+    files = {"options": tmp_path / "voice.json"}
+    assert not f5_voices.strict_start(files)  # no file
+    files["options"].write_text('{"strict_start": true}', encoding="utf-8")
+    assert f5_voices.strict_start(files) and f5_voices.uses_filler(files)
+    files["options"].write_text("[1]", encoding="utf-8")
+    assert not f5_voices.strict_start(files) and f5_voices.uses_filler(files)
