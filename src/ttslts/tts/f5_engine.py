@@ -110,10 +110,15 @@ class F5Voice:
         return np.asarray(audio, dtype=np.float32).reshape(-1)
 
     def pieces(
-        self, text: str, speed: float = 1.0, cancelled: Callable[[], bool] | None = None
+        self,
+        text: str,
+        speed: float = 1.0,
+        cancelled: Callable[[], bool] | None = None,
+        progress: Callable[[int, int], None] | None = None,
     ) -> Iterator[np.ndarray]:
         """The reading of ``text`` sentence by sentence, each with the pause before it, so
-        playback can start with the first sentence while the next ones are being made."""
+        playback can start with the first sentence while the next ones are being made.
+        ``progress(n, total)`` is told before sentence n (from 1) is made."""
         from ttslts.tts.f5_text import FILLER, PART_PAUSE_S, join_short, split_parts
         from ttslts.tts.hu_numbers import spell_numbers
         from ttslts.tts.hu_text import normalize_hungarian, spell_acronyms
@@ -140,6 +145,8 @@ class F5Voice:
         for n, (sentence, pause_after) in enumerate(chunks):
             if cancelled and cancelled():
                 return
+            if progress is not None:
+                progress(n + 1, len(chunks))
             audio = self.say(sentence, f5_speed, seed=n)
             if not audio.size:
                 continue
@@ -157,9 +164,13 @@ class F5Voice:
             pause = pause_after
 
     def synthesize(
-        self, text: str, speed: float = 1.0, cancelled: Callable[[], bool] | None = None
+        self,
+        text: str,
+        speed: float = 1.0,
+        cancelled: Callable[[], bool] | None = None,
+        progress: Callable[[int, int], None] | None = None,
     ) -> tuple[np.ndarray, int]:
-        parts = list(self.pieces(text, speed, cancelled))
+        parts = list(self.pieces(text, speed, cancelled, progress))
         if not parts:
             return np.zeros(0, dtype=np.float32), self.sample_rate
         return np.concatenate(parts), self.sample_rate

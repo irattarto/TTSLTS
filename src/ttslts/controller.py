@@ -62,6 +62,7 @@ class Controller(QObject):
         # One text to speech at a time; Stop also cancels speech that is still being made.
         self._tts_lock = threading.Lock()
         self._tts_generation = 0
+        self._tts_job = 0  # the newest Speak or Save (see _ready_when_played)
         # Starting the voice changer takes seconds (loading, warm-up): a second start in that
         # time must not make a second one, and a stop must cancel the one being started.
         self._vc_lock = threading.Lock()
@@ -475,21 +476,57 @@ class Controller(QObject):
 
     # -- text to speech --------------------------------------------------
     def render_tts(
-        self, text: str, cancelled: Callable[[], bool] | None = None
+        self,
+        text: str,
+        cancelled: Callable[[], bool] | None = None,
+        progress: Callable[[int, int], None] | None = None,
     ) -> tuple[np.ndarray, int]:
+        """The whole speech for ``text``; ``progress(n, total)`` before each F5 sentence."""
         from ttslts.tts import f5_voices, pronunciation
 
         s = self.settings
         text = pronunciation.apply_for(text, "hu", s.pron_builtin)
         if f5_voices.is_f5(s.piper_voice):
-            return self.f5().synthesize(text, s.tts_speed, cancelled)
+            return self.f5().synthesize(text, s.tts_speed, cancelled, progress=progress)
         audio, sr = self.piper().synthesize(
             text, s.tts_speed, noise_scale=s.piper_variation, noise_w=s.piper_rhythm
         )
         return audio, sr
 
+    def _new_tts_job(self) -> int:
+        """A number for this Speak or Save: only the newest one may still change the status."""
+        self._tts_job += 1
+        return self._tts_job
+
+    def _ready_when_played(
+        self, job: int, done: threading.Event | None = None, seconds: float = 0.0
+    ) -> None:
+        """'Ready' in the status bar once the speech has been heard to its end: playback runs on
+        after the work that started it returns, so "Speaking" would otherwise stay. Nothing is
+        shown if Stop, another Speak or a Save came first."""
+        generation = self._tts_generation
+
+        def current() -> bool:
+            return job == self._tts_job and generation == self._tts_generation
+
+        def wait():
+            end = time.monotonic() + seconds
+            while current():
+                if done is not None:
+                    if done.wait(0.2):
+                        break
+                elif time.monotonic() >= end:
+                    break
+                else:
+                    time.sleep(0.1)
+            if current():
+                self.status.emit("Ready")
+
+        threading.Thread(target=wait, daemon=True, name="tts-played").start()
+
     def speak(self, text: str) -> None:
         generation = self._tts_generation
+        job = self._new_tts_job()
 
         def work():
             self.ttsBusy.emit(True)
@@ -498,7 +535,7 @@ class Controller(QObject):
                     if generation != self._tts_generation:
                         return  # stopped before it started
                     self.status.emit("Synthesizing…")
-                    if self._speak_f5_streamed(text, generation):
+                    if self._speak_f5_streamed(text, generation, job):
                         return
                     audio, sr = self.render_tts(
                         text, cancelled=lambda: generation != self._tts_generation
@@ -510,13 +547,14 @@ class Controller(QObject):
                         devices.play(
                             audio, sr, devices.resolve(self.settings.tts_output_device, "output")
                         )
-                    self.status.emit("Speaking")
+                    self.status.emit("Speaking…")
+                    self._ready_when_played(job, seconds=audio.size / sr + 0.3)
             finally:
                 self.ttsBusy.emit(False)
 
         self._background(work, "tts")
 
-    def _speak_f5_streamed(self, text: str, generation: int) -> bool:
+    def _speak_f5_streamed(self, text: str, generation: int, job: int = 0) -> bool:
         """Read with an F5 voice, playing each sentence as soon as it is made (F5 takes a few
         seconds per sentence; the whole text first would mean a long silence). False when the
         chosen voice is not an F5 voice."""
@@ -562,10 +600,16 @@ class Controller(QObject):
                 stream = devices.SpeechStream(voice.sample_rate, device)
                 for piece in waiting:
                     stream.add(piece)
-            self.status.emit("Speaking")
+            self.status.emit("Speaking…")
+
+        def progress(n: int, total: int) -> None:
+            if stream is None:
+                self.status.emit(f"Making sentence {n} of {total}…")
+            else:  # playing while the rest is made
+                self.status.emit(f"Speaking, making sentence {n} of {total}…")
 
         try:
-            for piece in voice.pieces(prepared, s.tts_speed, cancelled):
+            for piece in voice.pieces(prepared, s.tts_speed, cancelled, progress=progress):
                 if cancelled():
                     break
                 with lock:
@@ -592,14 +636,25 @@ class Controller(QObject):
                     stream.finish()
         if cancelled():
             self.status.emit("Stopped")
+        elif stream is not None:
+            self.status.emit("Speaking…")  # all made, the rest is playing
+            self._ready_when_played(job, done=getattr(stream, "done", None))
         return True
 
     def save_wav(self, text: str, path: str) -> None:
+        self._new_tts_job()  # a reading that is still playing no longer says "Ready"
+
+        def progress(n: int, total: int) -> None:
+            self.status.emit(f"Making sentence {n} of {total}…")
+
         def work():
             self.ttsBusy.emit(True)
             try:
                 with self._tts_lock:
-                    audio, sr = self.render_tts(text)
+                    self.status.emit("Synthesizing…")
+                    audio, sr = self.render_tts(text, progress=progress)
+                kind = "MP3" if Path(path).suffix.lower() == ".mp3" else "WAV"
+                self.status.emit(f"Saving {kind}…")
                 write_audio(path, audio, sr)
                 self.status.emit(f"Saved {path}")
             finally:
@@ -610,6 +665,7 @@ class Controller(QObject):
     def stop_speaking(self) -> None:
         self._tts_generation += 1  # speech still being made is not played
         devices.stop()
+        self.status.emit("Stopped")
 
     # -- voice changer ---------------------------------------------------
     @property
