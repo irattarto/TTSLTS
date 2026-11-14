@@ -153,7 +153,7 @@ def test_controller_reads_with_the_f5_voice(monkeypatch):
     got = []
 
     class Voice:
-        def synthesize(self, text, speed, cancelled):
+        def synthesize(self, text, speed, cancelled, progress=None):
             got.append((text, speed))
             return np.ones(10, dtype=np.float32), 24000
 
@@ -273,7 +273,7 @@ def test_f5_speech_starts_with_the_first_sentence(monkeypatch):
     class Voice:
         sample_rate = 24000
 
-        def pieces(self, text, speed, cancelled):
+        def pieces(self, text, speed, cancelled, progress=None):
             for n in range(3):
                 made.append(n)
                 yield np.full(7 * 24000, n, dtype=np.float32)  # 7 s: more than the start buffer
@@ -376,7 +376,7 @@ def test_short_f5_speech_plays_when_all_is_made(monkeypatch):
     class Voice:
         sample_rate = 24000
 
-        def pieces(self, text, speed, cancelled):
+        def pieces(self, text, speed, cancelled, progress=None):
             yield np.ones(24000, dtype=np.float32)  # 1 s: under the start buffer
 
     class Stream:
@@ -524,3 +524,112 @@ def test_a_short_first_word_is_not_taken_for_a_scrap():
     audio = np.concatenate([a_word, np.zeros(60, np.float32), np.full(400, 0.5, np.float32)])
     assert f5_text.trim_leftover(audio, sr, text="A tűzoltók gyorsan") == 0.0
     assert f5_text.trim_leftover(audio, sr, text="Reggelente a madarak") > 0.08  # a scrap there
+
+
+def _status_log(controller):
+    from PySide6.QtCore import Qt
+
+    log = []
+    controller.status.connect(log.append, Qt.ConnectionType.DirectConnection)
+    return log
+
+
+def _wait_for(cond, timeout=5.0):
+    import time
+
+    end = time.monotonic() + timeout
+    while not cond() and time.monotonic() < end:
+        time.sleep(0.02)
+    return cond()
+
+
+def test_status_follows_an_f5_reading_to_its_end(monkeypatch):
+    import threading
+
+    from ttslts.audio import devices
+
+    controller = Controller(Settings(piper_voice="f5:galambos"), save=lambda s: None)
+    log = _status_log(controller)
+    played_out = threading.Event()
+
+    class Voice:
+        sample_rate = 24000
+
+        def pieces(self, text, speed, cancelled, progress=None):
+            for n in range(1, 4):
+                progress(n, 3)
+                yield np.zeros(7 * 24000, dtype=np.float32)
+
+    class Stream:
+        def __init__(self, sr, device):
+            self.done = played_out
+
+        def add(self, audio):
+            pass
+
+        def finish(self):
+            pass
+
+    monkeypatch.setattr(controller, "f5", lambda: Voice())
+    monkeypatch.setattr(devices, "SpeechStream", Stream)
+    monkeypatch.setattr(devices, "resolve", lambda *a: None)
+    controller.speak("Egy. Kettő. Három.")
+    assert _wait_for(lambda: log[-1:] == ["Speaking…"] and len(log) >= 5)
+    assert log[:4] == [
+        "Synthesizing…",
+        "Making sentence 1 of 3…",
+        "Speaking…",
+        "Speaking, making sentence 2 of 3…",
+    ]
+    assert "Ready" not in log  # still playing
+    played_out.set()
+    assert _wait_for(lambda: log[-1] == "Ready")
+
+
+def test_stop_and_a_new_job_keep_ready_from_showing(monkeypatch):
+    import threading
+
+    controller = Controller(Settings(), save=lambda s: None)
+    log = _status_log(controller)
+    playing = threading.Event()
+    controller._ready_when_played(controller._new_tts_job(), done=playing)
+    controller.stop_speaking()
+    controller._ready_when_played(controller._new_tts_job(), done=playing)
+    controller._new_tts_job()  # e.g. Save started while it played
+    playing.set()
+    import time
+
+    time.sleep(0.5)
+    assert log == ["Stopped"]
+
+
+def test_saving_tells_each_step(monkeypatch, tmp_path):
+    from PySide6.QtCore import Qt
+
+    controller = Controller(Settings(piper_voice="f5:galambos"), save=lambda s: None)
+    log = _status_log(controller)
+
+    class Voice:
+        def synthesize(self, text, speed, cancelled, progress=None):
+            progress(1, 2)
+            progress(2, 2)
+            return np.zeros(2400, dtype=np.float32), 24000
+
+    monkeypatch.setattr(controller, "f5", lambda: Voice())
+    import threading
+
+    done = threading.Event()
+    controller.ttsBusy.connect(
+        lambda busy: None if busy else done.set(), Qt.ConnectionType.DirectConnection
+    )
+    path = tmp_path / "speech.mp3"
+    controller.save_wav("Egy. Kettő.", str(path))
+    assert done.wait(5)
+    assert log == [
+        "Synthesizing…",
+        "Making sentence 1 of 2…",
+        "Making sentence 2 of 2…",
+        "Saving MP3…",
+        f"Saved {path}",
+    ]
+    assert path.stat().st_size > 0
