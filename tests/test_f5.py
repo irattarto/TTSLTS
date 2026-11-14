@@ -633,3 +633,25 @@ def test_saving_tells_each_step(monkeypatch, tmp_path):
         f"Saved {path}",
     ]
     assert path.stat().st_size > 0
+
+
+def test_a_lone_word_is_cut_where_the_word_after_nos_starts():
+    words = [(" Anos", 0.1, 0.5), (" HBU", 0.62, 1.0)]  # "écsbí ó", heard as anything
+    assert f5_text.short_filler_cut(words, 0.1) == pytest.approx(0.59)
+    assert f5_text.short_filler_cut([(" Ennos,", 0.0, 0.4), (" igen.", 0.5, 0.8)], 0.0) == (
+        pytest.approx(0.47)
+    )
+    # joined with the word, too late, or not heard at all: no cut from the words
+    assert f5_text.short_filler_cut([(" Enosvinetú", 0.0, 0.9)], 0.0) is None
+    assert f5_text.short_filler_cut([(" Igen", 2.0, 2.3), (" nos", 2.4, 2.6)], 0.1) is None
+    assert f5_text.short_filler_cut([(" Igen.", 0.1, 0.4)], 0.1) is None
+
+
+def test_pause_after_nos_is_found_by_loudness():
+    sr = 24000
+    t = np.arange(sr) / sr
+    tone = (0.5 * np.sin(2 * np.pi * 200 * t)).astype(np.float32)
+    silent = np.zeros(int(0.1 * sr), np.float32)
+    audio = np.concatenate([silent, tone[: int(0.4 * sr)], silent, tone[: int(0.5 * sr)]])
+    assert f5_text.pause_cut(audio, sr) == pytest.approx(0.6 - 0.03, abs=0.015)
+    assert f5_text.pause_cut(np.concatenate([silent, tone]), sr) is None  # no pause
