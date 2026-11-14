@@ -88,6 +88,7 @@ class Reader:
         self.whisper_dir = msg.get("whisper_dir")
         self.filler = msg.get("filler", True) is not False  # f5_voices.uses_filler
         self.strict_start = msg.get("strict_start") is True  # f5_voices.strict_start
+        self.sibilant_filler = msg.get("sibilant_filler") or ""  # f5_voices.sibilant_filler
         self._asr = None
 
     def asr(self):
@@ -165,6 +166,7 @@ class Reader:
             pause_cut,
             short_filler_cut,
             shorten_pauses,
+            starts_with_sibilant,
             starts_with_text,
             starts_with_vowel,
             trailing_silence,
@@ -180,6 +182,8 @@ class Reader:
         # Whisper hears a lone spelled-out word as anything ("écsbí ó" -> "HBU")
         short = len(text) < NO_FILLER_CHARS
         filler = FILLER if self.filler else ""
+        if filler and self.sibilant_filler and starts_with_sibilant(text):
+            filler = self.sibilant_filler  # voice2: "no, " - the "s" of "nos" ran into "sz"
         fix_duration = None
         if short:
             per_byte = self.ref_seconds / self.ref_bytes / max(speed, 0.1)
@@ -215,7 +219,7 @@ class Reader:
                 if cut is None:  # where "nos, " should end by the voice's own pace
                     per_byte = self.ref_seconds / self.ref_bytes / max(speed, 0.1)
                     cut = keep_enough(
-                        onset + per_byte * len(FILLER.encode("utf-8")), len(wav) / sr, text
+                        onset + per_byte * len(filler.encode("utf-8")), len(wav) / sr, text
                     )
             elif filler:
                 words = self.words(wav, sr)

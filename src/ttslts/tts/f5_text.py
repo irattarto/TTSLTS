@@ -432,6 +432,13 @@ def split_parts(text: str, max_bytes: int) -> list[str]:
 VOWELS = set("aáeéiíoóöőuúüű")
 
 
+def starts_with_sibilant(text: str) -> bool:
+    """Whether the text starts with s, sz, z, zs, c or cs: the "s" at the end of "nos, " runs
+    into such a start ("sSzemmel", "Scsendben") with some voices (see f5_voices.OPTIONS)."""
+    word = letters(first_word(text))
+    return bool(word) and word[0] in "szc"
+
+
 def starts_with_vowel(text: str) -> bool:
     word = letters(first_word(text))
     return bool(word) and word[0] in VOWELS

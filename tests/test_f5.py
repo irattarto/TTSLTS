@@ -714,3 +714,14 @@ def test_nos_run_into_the_word_is_noticed():
     assert not f5_text.filler_joined([(" Anos", 0.0, 0.4), (" vinetu", 0.5, 0.9)])
     assert not f5_text.filler_joined([(" Onnos,", 0.0, 0.4)])
     assert not f5_text.filler_joined([])
+
+
+def test_hissing_starts_can_have_their_own_filler(tmp_path):
+    for text in ("szemmel vejsz", "Zsófi", "csak", "Sajnos.", "zene"):
+        assert f5_text.starts_with_sibilant(text)
+    for text in ("igen", "tyúk", "A szél", "dzsungel", ""):
+        assert not f5_text.starts_with_sibilant(text)
+    files = {"options": tmp_path / "voice.json"}
+    assert f5_voices.sibilant_filler(files) == ""
+    files["options"].write_text('{"sibilant_filler": "no, ", "strict_start": true}', "utf-8")
+    assert f5_voices.sibilant_filler(files) == "no, " and f5_voices.strict_start(files)
