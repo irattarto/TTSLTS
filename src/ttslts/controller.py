@@ -46,6 +46,11 @@ class Controller(QObject):
     trainProgress = Signal(dict)
     trainSaved = Signal(str, int)
     trainFinished = Signal(str, str, bool)  # .pth, .onnx, finished (False: stopped early)
+    f5ToolsInstalled = Signal()
+    f5PrepRunning = Signal(bool)
+    f5PrepStage = Signal(str)
+    f5PrepProgress = Signal(float)
+    f5PrepFinished = Signal(str, bool)  # measured.json (empty when stopped/failed), finished
 
     def __init__(self, settings: Settings, save: Callable[[Settings], None] | None = None):
         super().__init__()
@@ -473,6 +478,145 @@ class Controller(QObject):
                 proc.terminate()
 
         threading.Thread(target=force, daemon=True, name="train-stop").start()
+
+    # -- own F5 voices: choosing the training clips ------------------------
+    @staticmethod
+    def f5_training_ready() -> bool:
+        """Whether the F5 environment can measure recordings (``train.f5_prepare``)."""
+        from ttslts.tts import f5_runtime
+
+        return f5_runtime.training_tools_ready()
+
+    def install_f5_training_tools(self) -> None:
+        """Add the narrator finder to the F5 environment. Call only after consent."""
+        from ttslts.tts import f5_runtime
+
+        def work():
+            f5_runtime.install_training_tools(self.status.emit)
+            self.f5ToolsInstalled.emit()
+            self.status.emit("Tools for training F5 voices ready")
+
+        self._background(work, "install-f5-train-tools", once=True)
+
+    @staticmethod
+    def f5_prep_dir(name: str) -> Path:
+        return paths.train_dir() / "f5" / name
+
+    @property
+    def f5_preparing(self) -> bool:
+        proc = getattr(self, "_f5_prep_proc", None)
+        return proc is not None and proc.poll() is None
+
+    def start_f5_prep(self, files: list[str], name: str) -> None:
+        """Write down and measure ``files`` for an own F5 voice called ``name`` (resumes a
+        stopped run of the same name; the recordings must stay the same)."""
+        from ttslts.tts import f5_runtime
+
+        if self.f5_preparing or self.training:
+            return
+        if not self.f5_training_ready():
+            self.error.emit("The tools for training F5 voices are not set up yet.")
+            return
+        if not files:
+            self.error.emit("Add at least one recording (mp3 or wav) of the voice.")
+            return
+        work = self.f5_prep_dir(name)
+        work.mkdir(parents=True, exist_ok=True)
+        job_file = work / "prepare.json"
+        if job_file.exists():
+            old = json.loads(job_file.read_text(encoding="utf-8")).get("files")
+            if old != files:  # other recordings: the transcripts so far are of no use
+                import shutil
+
+                for sub in ("files", "wavs"):
+                    shutil.rmtree(work / sub, ignore_errors=True)
+                (work / "measured.json").unlink(missing_ok=True)
+        models = paths.models_dir()
+        job = {
+            "files": files,
+            "work_dir": str(work),
+            "whisper_dir": str(models / "whisper"),
+            "ecapa_dir": str(models / "ecapa"),
+            "rmvpe_path": self.settings.rmvpe_path or "",
+            "device": "cuda" if self.settings.use_gpu else "cpu",
+        }
+        job_file.write_text(json.dumps(job, indent=2), encoding="utf-8")
+        log_file = open(work / "prepare.log", "w", encoding="utf-8")  # closed by the reader
+        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        try:
+            command = [*f5_runtime.python_command(), "-u", "-m", "ttslts.train.f5_prepare"]
+            proc = subprocess.Popen(
+                [*command, str(job_file)],
+                stdout=subprocess.PIPE,
+                stderr=log_file,
+                text=True,
+                encoding="utf-8",
+                creationflags=flags,
+                env={
+                    **os.environ,
+                    "PYTHONIOENCODING": "utf-8",
+                    "HF_HOME": str(models / "hf"),  # the speaker model: in the app's folder
+                    **f5_runtime.prepare_for_run(),
+                },
+            )
+        except OSError as exc:
+            log_file.close()
+            self.error.emit(f"Could not start: {exc}")
+            return
+        self._f5_prep_proc, self._f5_prep_work = proc, work
+        self._release_gpu_models()
+        self.f5PrepRunning.emit(True)
+        threading.Thread(
+            target=self._read_f5_prep, args=(proc, log_file, work), daemon=True, name="f5-prep"
+        ).start()
+
+    def _read_f5_prep(self, proc: subprocess.Popen, log_file, work: Path) -> None:
+        measured, ended, last_error = "", False, ""
+        try:
+            for line in proc.stdout:
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                kind = event.get("type")
+                if kind == "stage":
+                    self.f5PrepStage.emit(event.get("text", ""))
+                elif kind == "progress":
+                    self.f5PrepProgress.emit(float(event.get("fraction", 0.0)))
+                elif kind == "done":
+                    measured, ended = event.get("measured", ""), True
+                elif kind == "stopped":
+                    ended = True
+                elif kind == "error":
+                    last_error = event.get("message", "")
+            proc.wait()
+        finally:
+            log_file.close()
+            self._f5_prep_proc = None
+            self.f5PrepRunning.emit(False)
+        self.f5PrepFinished.emit(measured, bool(measured))
+        if not ended:
+            why = last_error or "the process ended unexpectedly"
+            self.error.emit(
+                f"Preparing the recordings stopped: {why}\n\nDetails: {work / 'prepare.log'}"
+            )
+
+    def stop_f5_prep(self) -> None:
+        """Ask the measuring to stop; what is written down so far is kept for the next start."""
+        work = getattr(self, "_f5_prep_work", None)
+        if self.f5_preparing and work is not None:
+            (work / "STOP").write_text("stop", encoding="utf-8")
+            self.f5PrepStage.emit("Stopping…")
+
+    def play_clip(self, path: str | Path) -> None:
+        """Play a training clip on the speech output (the selection check)."""
+        from ttslts.train.prepare import load_audio
+
+        def work():
+            audio, sr = load_audio(path)
+            devices.play(audio, sr, devices.resolve(self.settings.tts_output_device, "output"))
+
+        self._background(work, "play-clip")
 
     # -- text to speech --------------------------------------------------
     def render_tts(

@@ -182,6 +182,11 @@ class MainWindow(QMainWindow):
         c.trainProgress.connect(self._on_train_progress)
         c.trainSaved.connect(self._on_train_saved)
         c.trainFinished.connect(self._on_train_finished)
+        c.f5ToolsInstalled.connect(self._on_f5_tools_installed)
+        c.f5PrepRunning.connect(self._on_f5_prep_running)
+        c.f5PrepStage.connect(self._on_train_stage)
+        c.f5PrepProgress.connect(self._on_f5_prep_progress)
+        c.f5PrepFinished.connect(self._on_f5_prep_finished)
 
     # -- tabs ------------------------------------------------------------
     def _build_tts_tab(self) -> QWidget:
@@ -315,14 +320,22 @@ class MainWindow(QMainWindow):
         s = self.settings
         w = QWidget()
         layout = QVBoxLayout(w)
-        intro = QLabel(
-            "Train your own voice from recordings of it. Add mp3 or wav files with one person "
-            "speaking clearly, without music or background noise. About 10 minutes gives a good "
-            "voice; even 2-3 minutes works. Only use recordings of voices you have permission "
-            "to use."
+        kind_row = QHBoxLayout()
+        kind_row.addWidget(QLabel("Make"))
+        self.train_kind_combo = QComboBox()
+        self.train_kind_combo.addItem("a voice for the voice changer (RVC)", "rvc")
+        self.train_kind_combo.addItem("a text-to-speech voice (F5)", "f5")
+        self.train_kind_combo.setCurrentIndex(max(0, self.train_kind_combo.findData(s.train_kind)))
+        self.train_kind_combo.currentIndexChanged.connect(self._train_kind_changed)
+        self.train_kind_combo.setToolTip(
+            "A voice-changer voice (RVC) turns your speech into the voice live; a text-to-speech "
+            "voice (F5) reads text aloud in the voice"
         )
-        intro.setWordWrap(True)
-        layout.addWidget(intro)
+        kind_row.addWidget(self.train_kind_combo, 1)
+        layout.addLayout(kind_row)
+        self.train_intro = QLabel()
+        self.train_intro.setWordWrap(True)
+        layout.addWidget(self.train_intro)
         self.train_setup_hint = QLabel(
             "The first time, TTSLTS sets up PyTorch for training (a one-time download, "
             "you are asked first)."
@@ -386,7 +399,10 @@ class MainWindow(QMainWindow):
         )
         form.addRow("Save every", self.train_save_spin)
         self.train_save_spin.setSuffix(" epochs")
-        layout.addLayout(form)
+        self.train_rvc_box = QWidget()
+        rvc_layout = QVBoxLayout(self.train_rvc_box)
+        rvc_layout.setContentsMargins(0, 0, 0, 0)
+        rvc_layout.addLayout(form)
 
         buttons = QHBoxLayout()
         self.train_start_btn = QPushButton("Start training")
@@ -406,7 +422,10 @@ class MainWindow(QMainWindow):
             self.train_folder_btn,
         ):
             buttons.addWidget(b)
-        layout.addLayout(buttons)
+        rvc_layout.addLayout(buttons)
+        layout.addWidget(self.train_rvc_box)
+        self.train_f5_box = self._build_f5_train_box()
+        layout.addWidget(self.train_f5_box)
 
         self.train_bar = QProgressBar()
         self.train_bar.setRange(0, 1000)
@@ -421,8 +440,160 @@ class MainWindow(QMainWindow):
         self._train_result = ""  # the .onnx of the last finished run
         self._train_busy = False
         self._pending_train: tuple | None = None
+        self._pending_f5_prep = False
         self._apply_train_availability()
+        self._train_kind_changed()
         return w
+
+    TRAIN_INTROS = {
+        "rvc": (
+            "Train your own voice from recordings of it. Add mp3 or wav files with one person "
+            "speaking clearly, without music or background noise. About 10 minutes gives a good "
+            "voice; even 2-3 minutes works. Only use recordings of voices you have permission "
+            "to use."
+        ),
+        "f5": (
+            "Make a text-to-speech voice from an audiobook read by one narrator: add its "
+            "chapters (1-3 hours in all; more is better). TTSLTS writes them down, keeps the "
+            "narrator's own calm voice and lets you check that by ear before training. Needs an "
+            "NVIDIA graphics card with 8 GB and the F5-TTS environment. Only use recordings of "
+            "voices you have permission to use."
+        ),
+    }
+
+    def _build_f5_train_box(self) -> QWidget:
+        box = QWidget()
+        layout = QVBoxLayout(box)
+        layout.setContentsMargins(0, 0, 0, 0)
+        row = QHBoxLayout()
+        self.f5_prep_btn = QPushButton("1. Prepare the recordings")
+        self.f5_prep_btn.setToolTip(
+            "Write the recordings down sentence by sentence and measure every sentence "
+            "(an hour of audio takes a few minutes on the graphics card). A stopped run "
+            "goes on where it stopped."
+        )
+        self.f5_prep_btn.clicked.connect(self._f5_prep_start)
+        self.f5_prep_stop_btn = QPushButton("Stop")
+        self.f5_prep_stop_btn.setEnabled(False)
+        self.f5_prep_stop_btn.clicked.connect(self.controller.stop_f5_prep)
+        self.f5_prep_stop_btn.setToolTip("Stop preparing; starting again goes on from here")
+        self.f5_check_btn = QPushButton("2. Check the sentences…")
+        self.f5_check_btn.setToolTip(
+            "Listen to what is kept and what is left out, and choose how strict the choice is"
+        )
+        self.f5_check_btn.clicked.connect(self._f5_check)
+        for b in (self.f5_prep_btn, self.f5_prep_stop_btn, self.f5_check_btn):
+            row.addWidget(b)
+        row.addStretch(1)
+        layout.addLayout(row)
+        self.f5_choice_label = QLabel()
+        self.f5_choice_label.setWordWrap(True)
+        self.f5_choice_label.setStyleSheet("color: gray;")
+        layout.addWidget(self.f5_choice_label)
+        return box
+
+    def _train_kind_changed(self, _index: int | None = None) -> None:
+        kind = self.train_kind_combo.currentData()
+        if kind != self.settings.train_kind:
+            self._set("train_kind", kind)
+        self.train_intro.setText(self.TRAIN_INTROS[kind])
+        self.train_rvc_box.setVisible(kind == "rvc")
+        self.train_f5_box.setVisible(kind == "f5")
+        ready = self.controller.training_runtime_ready()
+        self.train_setup_hint.setVisible(kind == "rvc" and not ready)
+        self._f5_update_choice()
+
+    def _f5_work(self) -> Path:
+        return self.controller.f5_prep_dir(self._train_name())
+
+    def _f5_update_choice(self) -> None:
+        from ttslts.train import f5_data
+
+        work = self._f5_work()
+        measured = (work / "measured.json").exists()
+        self.f5_check_btn.setEnabled(measured and not self.controller.f5_preparing)
+        saved = f5_data.load_selection(work)
+        if saved:
+            r = saved["report"]
+            self.f5_choice_label.setText(
+                f"Chosen: {r['kept']} sentences, {r['kept_minutes']:.0f} minutes "
+                f"({saved['strictness']})."
+            )
+        elif measured:
+            self.f5_choice_label.setText("Prepared: check the sentences next.")
+        else:
+            self.f5_choice_label.setText("")
+
+    def _f5_prep_start(self) -> None:
+        from ttslts.tts import f5_runtime
+
+        name = self._train_name()
+        self.train_name_edit.setText(name)
+        self._set("train_name", name)
+        if not self.controller.f5_runtime_ready():
+            QMessageBox.information(
+                self,
+                APP_NAME,
+                "Set up the F5-TTS environment first (Settings > Models > Set up F5-TTS voices).",
+            )
+            return
+        if not self.controller.f5_training_ready():
+            box = QMessageBox(self)
+            box.setIcon(QMessageBox.Icon.Question)
+            box.setWindowTitle(f5_runtime.TRAINING_CONSENT_TITLE)
+            box.setText("Set up what training F5 voices needs?")
+            box.setInformativeText(f5_runtime.TRAINING_CONSENT_TEXT)
+            accept = box.addButton("Download and set up", QMessageBox.ButtonRole.AcceptRole)
+            box.addButton(QMessageBox.StandardButton.Cancel)
+            box.exec()
+            if box.clickedButton() is accept:
+                self._pending_f5_prep = True
+                self.f5_prep_btn.setEnabled(False)
+                self.train_bar.setRange(0, 0)
+                self.controller.install_f5_training_tools()
+            return
+        files = [self.train_files.item(i).text() for i in range(self.train_files.count())]
+        self.train_log.clear()
+        self.controller.start_f5_prep(files, name)
+
+    def _on_f5_tools_installed(self) -> None:
+        self.train_bar.setRange(0, 1000)
+        self.f5_prep_btn.setEnabled(True)
+        if self._pending_f5_prep:
+            self._pending_f5_prep = False
+            self._f5_prep_start()
+
+    def _on_f5_prep_running(self, running: bool) -> None:
+        self.f5_prep_btn.setEnabled(not running)
+        self.f5_prep_stop_btn.setEnabled(running)
+        for widget in (
+            self.train_add_btn,
+            self.train_remove_btn,
+            self.train_files,
+            self.train_name_edit,
+            self.train_kind_combo,
+        ):
+            widget.setEnabled(not running)
+        self.train_start_btn.setEnabled(not running and not self._train_busy)
+        self._f5_update_choice()
+
+    def _on_f5_prep_progress(self, fraction: float) -> None:
+        self.train_bar.setValue(int(fraction * 1000))
+
+    def _on_f5_prep_finished(self, _measured: str, done: bool) -> None:
+        self._f5_update_choice()
+        if done:
+            self.train_status.setText("The recordings are prepared: check the sentences.")
+            self._f5_check()
+
+    def _f5_check(self) -> None:
+        from ttslts.ui.f5_review_dialog import F5ReviewDialog
+
+        work = self._f5_work()
+        if not (work / "measured.json").exists():
+            return
+        F5ReviewDialog(work, self.controller.play_clip, self).exec()
+        self._f5_update_choice()
 
     def _build_settings_tab(self) -> QWidget:
         s = self.settings

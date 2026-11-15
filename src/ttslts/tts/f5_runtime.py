@@ -64,3 +64,53 @@ def install(
     return runtime.install(
         progress, status, base or root(), torch_packages=TORCH, packages=PACKAGES, check=CHECK
     )
+
+
+# Training an own F5 voice (``train.f5_prepare``) also needs the narrator finder: SpeechBrain
+# (Apache-2.0) with its ECAPA speaker model, added to this environment on the first training.
+TRAINING_PACKAGES = ["speechbrain>=1.0,<2"]
+TRAINING_CHECK = "import speechbrain.inference.speaker"
+TRAINING_MARKER = "training-tools.json"
+TRAINING_CONSENT_TITLE = "Set up training F5 voices"
+TRAINING_CONSENT_TEXT = """\
+Training an own F5 voice writes down and measures your recordings first. For that TTSLTS adds
+to its F5 environment and downloads, now or on first use:
+
+  - SpeechBrain (Apache-2.0), from PyPI, and its ECAPA speaker model (Apache-2.0), from
+    Hugging Face: it tells the narrator's own voice from the characters he or she plays
+  - Whisper large-v3 and large-v3-turbo (MIT), from Hugging Face: they write the recordings
+    down (about 4.6 GB together, into the TTSLTS models folder)
+
+Only use recordings of a voice you have permission to use."""
+
+
+def training_tools_ready(base: Path | None = None) -> bool:
+    base = base or root()
+    return is_installed(base) and (base / TRAINING_MARKER).exists()
+
+
+def install_training_tools(
+    status: Callable[[str], None] | None = None, base: Path | None = None
+) -> None:
+    """Add what training an own F5 voice needs to the F5 environment (a small download)."""
+    import json
+    import os
+    import subprocess
+
+    base = base or root()
+    python = python_command(base)
+    say = status or (lambda _text: None)
+    say("Installing the tools for training F5 voices…")
+    runtime._run(
+        [*python, "-m", "pip", "install", "--no-warn-script-location",
+         "--disable-pip-version-check", *TRAINING_PACKAGES],
+        status,
+    )  # fmt: skip
+    check = subprocess.run(
+        [*python, "-c", TRAINING_CHECK], capture_output=True, text=True,
+        env={**os.environ, **prepare_for_run(base)},
+        creationflags=runtime._no_window(),
+    )  # fmt: skip
+    if check.returncode != 0:
+        raise RuntimeError("The F5 training tools did not start:\n" + check.stderr[-600:])
+    (base / TRAINING_MARKER).write_text(json.dumps({"packages": TRAINING_PACKAGES}), "utf-8")

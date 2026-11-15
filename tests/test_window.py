@@ -288,3 +288,38 @@ def test_add_voice_button_adds_and_selects_the_voice(make_window, monkeypatch, t
     assert w.settings.piper_voice == "hu_HU-voice1-medium"
     assert w.piper_combo.currentText() == "voice1 (own Piper voice)"
     assert w.add_voice_btn.toolTip()
+
+
+def test_train_tab_makes_an_f5_voice_in_steps(make_window, monkeypatch):
+    import json
+
+    from ttslts.train import f5_data
+
+    w = make_window()
+    assert not w.train_rvc_box.isHidden() and w.train_f5_box.isHidden()
+    w.train_kind_combo.setCurrentIndex(w.train_kind_combo.findData("f5"))
+    assert w.settings.train_kind == "f5"
+    assert not w.train_f5_box.isHidden() and w.train_rvc_box.isHidden()
+    assert "audiobook" in w.train_intro.text()
+    assert not w.f5_check_btn.isEnabled()  # nothing prepared yet
+
+    w.controller.f5PrepRunning.emit(True)
+    assert not w.f5_prep_btn.isEnabled() and w.f5_prep_stop_btn.isEnabled()
+    assert not w.train_files.isEnabled()
+    w.controller.f5PrepProgress.emit(0.25)
+    assert w.train_bar.value() == 250
+    work = w._f5_work()
+    work.mkdir(parents=True)
+    clips = [{"name": f"000_{n:05d}", "text": "mondat", "dur": 3.0, "sim": 0.9, "core": True,
+              "f0": 110.0, "wobble": 50.0, "agree": 1.0} for n in range(10)]  # fmt: skip
+    (work / "measured.json").write_text(json.dumps(clips), encoding="utf-8")
+    opened = []
+    monkeypatch.setattr(w, "_f5_check", lambda: opened.append(True))
+    w.controller.f5PrepRunning.emit(False)
+    w.controller.f5PrepFinished.emit(str(work / "measured.json"), True)
+    assert (
+        opened and w.f5_check_btn.isEnabled() and "check the sentences" in w.f5_choice_label.text()
+    )
+    f5_data.save_selection(work, "normal", clips, f5_data.select(clips))
+    w._f5_update_choice()
+    assert "Chosen:" in w.f5_choice_label.text()

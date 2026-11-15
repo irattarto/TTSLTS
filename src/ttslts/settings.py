@@ -55,6 +55,7 @@ class Settings:
     train_epochs: int = 200
     train_batch_size: int = 8
     train_save_every: int = 25
+    train_kind: str = "rvc"  # what the Train tab makes: "rvc" (voice changer) or "f5" (speech)
 
     # Runtime
     use_gpu: bool = True
