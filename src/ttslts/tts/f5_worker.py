@@ -89,6 +89,7 @@ class Reader:
         self.filler = msg.get("filler", True) is not False  # f5_voices.uses_filler
         self.strict_start = msg.get("strict_start") is True  # f5_voices.strict_start
         self.sibilant_filler = msg.get("sibilant_filler") or ""  # f5_voices.sibilant_filler
+        self.start_zs = msg.get("start_zs") or ""  # f5_voices.start_zs
         self._asr = None
 
     def asr(self):
@@ -185,6 +186,9 @@ class Reader:
         # next word after "nos", or at the comma's pause: the word itself is not looked for, as
         # Whisper hears a lone spelled-out word as anything ("écsbí ó" -> "HBU")
         short = len(text) < NO_FILLER_CHARS
+        said = text  # what the model is given; ``text`` stays for the checks
+        if self.start_zs and text[:2] == "zs":  # voice2: "Sófi" at the start, "zzs" helps
+            said = self.start_zs + text[2:]
         filler = FILLER if self.filler else ""
         if filler and self.sibilant_filler and starts_with_sibilant(text):
             filler = self.sibilant_filler  # voice2: "no, " - the "s" of "nos" ran into "sz"
@@ -201,7 +205,7 @@ class Reader:
             t0 = time.perf_counter()
             seed_everything(seed + 1000 * attempt)
             wav, sr, _ = infer_process(
-                self.ref_audio, self.ref_text, filler + text, self.model.ema_model,
+                self.ref_audio, self.ref_text, filler + said, self.model.ema_model,
                 self.model.vocoder, self.model.mel_spec_type, show_info=lambda *a: None,
                 speed=speed, nfe_step=int(msg.get("nfe", 32)),
                 device=self.device, fix_duration=fix_duration,

@@ -11,7 +11,9 @@ An F5 voice is a folder ``<models>/f5/<name>/`` with
   ``{"strict_start": true}`` for a voice that leaves a loud bit of the filler ("s", a breath)
   before the first word (voice2): see ``f5_text.held_vowel_onset`` and ``loud_scrap_end``;
   ``{"sibilant_filler": "no, "}``: the filler in front of a text starting with s, sz, z, zs, c
-  or cs, for a voice whose "nos" runs its "s" into that sound (voice2: "sSzemmel").
+  or cs, for a voice whose "nos" runs its "s" into that sound (voice2: "sSzemmel");
+  ``{"start_zs": "zzs"}``: how a "zs" at the very start of a reading is written for the model, for a
+  voice that says it as "s" there (voice2: "Sófi"; "zzs" 4 of 8 right instead of 1).
 
 No F5 voice is downloaded or shipped: the Hungarian F5 base model is licensed for non-commercial
 use only (CC BY-NC 4.0), so voices are only ever added by the user, from their own files.
@@ -76,6 +78,12 @@ def uses_filler(files: dict[str, Path]) -> bool:
 def sibilant_filler(files: dict[str, Path]) -> str:
     """The filler before a text starting with a hissing sound, "" for the usual one."""
     value = _options(files).get("sibilant_filler")
+    return value if isinstance(value, str) and value.strip() else ""
+
+
+def start_zs(files: dict[str, Path]) -> str:
+    """The spelling of a "zs" that starts a reading, "" to leave it as it is."""
+    value = _options(files).get("start_zs")
     return value if isinstance(value, str) and value.strip() else ""
 
 

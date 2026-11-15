@@ -44,6 +44,7 @@ class F5Voice:
         self.filler = f5_voices.uses_filler(files)
         self.strict_start = f5_voices.strict_start(files)
         self.sibilant_filler = f5_voices.sibilant_filler(files)
+        self.start_zs = f5_voices.start_zs(files)
         self.sample_rate = 24000
         self._lock = threading.Lock()
         self._tmp = Path(tempfile.mkdtemp(prefix="ttslts-f5-"))
@@ -77,6 +78,7 @@ class F5Voice:
             filler=self.filler,
             strict_start=self.strict_start,
             sibilant_filler=self.sibilant_filler,
+            start_zs=self.start_zs,
         )
         self.device = reply.get("device", "cpu")
         self.part_bytes = int(reply.get("part_bytes", 0))  # 0: the worker cuts long ones itself

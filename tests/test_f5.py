@@ -760,3 +760,10 @@ def test_strict_start_cuts_the_s_of_nos_before_a_voiced_start():
     inside = np.concatenate([word[: int(0.2 * sr)], hiss, word])
     assert f5_text.hiss_before_voiced(inside, sr) == 0.0
     assert "r" in f5_text.VOICED_START and "s" not in f5_text.VOICED_START
+
+
+def test_a_voice_can_spell_a_starting_zs_its_own_way(tmp_path):
+    files = {"options": tmp_path / "voice.json"}
+    assert f5_voices.start_zs(files) == ""
+    files["options"].write_text('{"start_zs": "zzs", "strict_start": true}', "utf-8")
+    assert f5_voices.start_zs(files) == "zzs" and f5_voices.strict_start(files)
