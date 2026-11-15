@@ -29,8 +29,8 @@ def test_filler_is_cut_just_before_the_first_word():
 
 
 def test_a_stray_sound_heard_as_a_word_is_cut_too():
-    words = [(" U", 0.0, 0.2), (" nos,", 0.2, 0.6), (" voice1", 0.7, 1.2)]
-    cut, ok = f5_text.filler_cut(words, "voice1")
+    words = [(" U", 0.0, 0.2), (" nos,", 0.2, 0.6), (" madarak", 0.7, 1.2)]
+    cut, ok = f5_text.filler_cut(words, "madarak")
     assert ok and cut == pytest.approx(0.73)
 
 

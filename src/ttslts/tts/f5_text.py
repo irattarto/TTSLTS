@@ -369,8 +369,8 @@ STRICT_MAX_S = 0.2  # the leftovers measured were 20-150 ms: a longer cut takes 
 
 def held_vowel_onset(audio, sr: int, text: str = "") -> float:
     """Strict start cleaning, text starting with a vowel: where a real vowel starts - loud (within
-    20 dB of the loudest), mostly under 1 kHz and held for 50 ms. voice2's filler left a loud hiss or
-    a murmur of 20-90 ms in front that ``vowel_onset`` took for the vowel ("picike hang előtte").
+    20 dB of the loudest), mostly under 1 kHz and held for 50 ms. voice2's filler left a loud hiss
+    or a murmur of 20-90 ms in front that ``vowel_onset`` took for the vowel ("picike hang előtte").
     A first word of one or two letters ("A rózsa") is short and unstressed: 20 ms within 28 dB
     count (held 50 ms, the cut went on to the "ó" and "A" was lost). At most STRICT_MAX_S."""
     if len(audio) < 5 * int(0.01 * sr):
