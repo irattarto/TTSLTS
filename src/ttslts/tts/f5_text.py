@@ -379,6 +379,37 @@ def held_vowel_onset(audio, sr: int, text: str = "") -> float:
     return 0.0
 
 
+VOICED_START = set("rlmnjv")  # sounds with no hiss of their own: a hiss in front is left of "nos"
+
+
+def hiss_before_voiced(audio, sr: int, window_s: float = 0.25) -> float:
+    """Strict start cleaning, text starting with r, l, m, n, j or v: the "s" of "nos" ran straight
+    into it, with no pause to find ("sReggel", "sLassan": 40-130 ms of hiss at 2-4.5 kHz, then the
+    voiced sound under 1 kHz). The word starts where sound under 1 kHz (within 25 dB of the
+    loudest) holds for 80 ms, a murmur of 30-40 ms does not count; if there is hiss (within 35 dB,
+    centre over 2 kHz) before that start, the cut goes 10 ms before it. Hiss later on, inside the
+    word ("Mindenki"), is not looked at. 0 when the start is after ``window_s`` or not hissed."""
+    import numpy as np
+
+    if len(audio) < 5 * int(0.01 * sr):
+        return 0.0
+    level, low, n = _start_frames(audio, sr)
+    frame = int(0.01 * sr)
+    frames = np.asarray(audio[: n * frame], dtype=np.float32).reshape(n, frame)
+    spec = np.abs(np.fft.rfft(frames * np.hanning(frame), axis=1)) ** 2
+    freqs = np.fft.rfftfreq(frame, 1 / sr)
+    centre = (spec * freqs).sum(axis=1) / (spec.sum(axis=1) + 1e-12)
+    voiced = (level > -25) & (low > 0.6)
+    start = next(
+        (i for i in range(min(n - 8, int(window_s / 0.01) + 1)) if voiced[i : i + 8].all()), None
+    )
+    if not start:
+        return 0.0
+    if not any(level[i] > -35 and centre[i] > 2000 for i in range(start)):
+        return 0.0
+    return max(0.0, (start - 1) * 0.01)
+
+
 def loud_scrap_end(audio, sr: int) -> float:
     """Strict start cleaning, text starting with a consonant: a scrap (within 30 dB of the
     loudest, up to 200 ms) then 40 ms quieter, then the word: the scrap is the filler's "s"

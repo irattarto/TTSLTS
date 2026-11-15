@@ -742,3 +742,21 @@ def test_strict_start_keeps_a_short_first_word():
     late = np.concatenate([np.zeros(int(0.5 * sr), np.float32), _tone(sr, 0.4, 150, 0.5)])
     late[: int(0.5 * sr)] += _tone(sr, 0.5, 3000, 0.02)
     assert f5_text.held_vowel_onset(late, sr, "Ottó") == 0.0
+
+
+def test_strict_start_cuts_the_s_of_nos_before_a_voiced_start():
+    sr = 24000
+    rng = np.random.default_rng(2)
+    t = np.arange(int(0.07 * sr)) / sr
+    hiss = (0.15 * np.sin(2 * np.pi * 3500 * t) + 0.02 * rng.standard_normal(len(t))).astype(
+        np.float32
+    )
+    word = _tone(sr, 0.5, 150, 0.5)  # "Lassan": voiced, under 1 kHz
+    assert f5_text.hiss_before_voiced(np.concatenate([hiss, word]), sr) == pytest.approx(
+        0.06, abs=0.011
+    )
+    assert f5_text.hiss_before_voiced(word, sr) == 0.0  # starts clean
+    # hiss inside the word ("Mindenki": the "nd") is not taken for a leftover
+    inside = np.concatenate([word[: int(0.2 * sr)], hiss, word])
+    assert f5_text.hiss_before_voiced(inside, sr) == 0.0
+    assert "r" in f5_text.VOICED_START and "s" not in f5_text.VOICED_START

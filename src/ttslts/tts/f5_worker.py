@@ -154,13 +154,17 @@ class Reader:
             FILLER_MAX_S,
             NO_FILLER_CHARS,
             SHORT_MIN_S,
+            VOICED_START,
             filler_cut,
             filler_joined,
+            first_word,
             heard_enough,
             held_vowel_onset,
+            hiss_before_voiced,
             is_lively,
             keep_enough,
             leading_silence,
+            letters,
             loud_scrap_end,
             melody_range,
             pause_cut,
@@ -210,7 +214,14 @@ class Reader:
                     "heard: " + " ".join(f"{w}@{s:.2f}" for w, s, _ in words[:5]), file=sys.stderr
                 )
                 onset = leading_silence(wav, sr)
-                cut = short_filler_cut(words, onset)
+                # the text's own first word, when Whisper hears it ("valaki": "nos" was heard as
+                # "most", and the pause after "valaki" was taken for the comma's); else the word
+                # after "nos" (a spelled-out "écsbí ó" is heard as anything), else the pause
+                cut, found = filler_cut(words, text)
+                # "Anosvinetú" heard as one word: the share guessed inside it cut too early ("Ano"
+                # stayed); read again instead, as before
+                if not found or cut > onset + FILLER_MAX_S or filler_joined(words):
+                    cut = short_filler_cut(words, onset)
                 if cut is None and not filler_joined(words):
                     cut = pause_cut(wav, sr)
                 if cut is not None and keep_enough(cut, len(wav) / sr, text) != cut:
@@ -247,6 +258,8 @@ class Reader:
                     vowel = starts_with_vowel(text)
                     more = held_vowel_onset(wav, sr, text) if vowel else loud_scrap_end(wav, sr)
                     wav = wav[int(more * sr) :].copy()
+                    if letters(first_word(text))[:1] in VOICED_START:  # "sReggel": no pause
+                        wav = wav[int(hiss_before_voiced(wav, sr) * sr) :].copy()
             if (filler and ok and not short) or check_start:  # listen to the new start
                 after = self.words(wav, sr)
                 ok = starts_with_text(after, text)
