@@ -89,8 +89,9 @@ def train(
     torch.manual_seed(seed)
     device = pick_device(use_gpu)
     amp = fp16 and device.type == "cuda"
-    if device.type == "cuda":
-        torch.backends.cudnn.benchmark = True
+    # no cudnn.benchmark: the clips differ in length, so it tuned again for almost every batch
+    # (3.5 s a step on an RTX 4060 against 0.94 s without it)
+    torch.backends.cudnn.benchmark = False
 
     dataset = VoiceDataset(work, cfg)
     if len(dataset) == 0:
