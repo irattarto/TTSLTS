@@ -358,15 +358,22 @@ def _start_frames(audio, sr: int, window_s: float = 0.8):
     return (level - level.max())[:n], low, n
 
 
-def held_vowel_onset(audio, sr: int, hold: int = 5) -> float:
+STRICT_MAX_S = 0.2  # the leftovers measured were 20-150 ms: a longer cut takes the text itself
+
+
+def held_vowel_onset(audio, sr: int, text: str = "") -> float:
     """Strict start cleaning, text starting with a vowel: where a real vowel starts - loud (within
     20 dB of the loudest), mostly under 1 kHz and held for 50 ms. voice2's filler left a loud hiss or
-    a murmur of 20-90 ms in front that ``vowel_onset`` took for the vowel ("picike hang előtte")."""
+    a murmur of 20-90 ms in front that ``vowel_onset`` took for the vowel ("picike hang előtte").
+    A first word of one or two letters ("A rózsa") is short and unstressed: 20 ms within 28 dB
+    count (held 50 ms, the cut went on to the "ó" and "A" was lost). At most STRICT_MAX_S."""
     if len(audio) < 5 * int(0.01 * sr):
         return 0.0
     level, low, n = _start_frames(audio, sr)
-    vowel = (level > -20) & (low > 0.6)
-    for i in range(n - hold):
+    short_word = 0 < len(letters(first_word(text))) <= 2
+    hold, floor = (2, -28) if short_word else (5, -20)
+    vowel = (level > floor) & (low > 0.6)
+    for i in range(min(n - hold, int(STRICT_MAX_S / 0.01) + 1)):
         if vowel[i : i + hold].all():
             return i * 0.01
     return 0.0

@@ -725,3 +725,20 @@ def test_hissing_starts_can_have_their_own_filler(tmp_path):
     assert f5_voices.sibilant_filler(files) == ""
     files["options"].write_text('{"sibilant_filler": "no, ", "strict_start": true}', "utf-8")
     assert f5_voices.sibilant_filler(files) == "no, " and f5_voices.strict_start(files)
+
+
+def test_strict_start_keeps_a_short_first_word():
+    sr = 24000
+    quiet = np.zeros(int(0.03 * sr), np.float32)
+    a_word = _tone(sr, 0.04, 150, 0.08)  # "A": short and about 16 dB under the loudest
+    gap = np.zeros(int(0.06 * sr), np.float32)
+    audio = np.concatenate([quiet, a_word, gap, _tone(sr, 0.4, 150, 0.5)])  # then "rózsa"
+    assert f5_text.held_vowel_onset(audio, sr, "A rózsa a garázsban maradt.") == pytest.approx(
+        0.03, abs=0.011
+    )
+    # without the short word the held vowel is the "ó", as before
+    assert f5_text.held_vowel_onset(audio, sr, "Ottó") == pytest.approx(0.13, abs=0.011)
+    # never more than STRICT_MAX_S: a long quiet start is not cut away whole
+    late = np.concatenate([np.zeros(int(0.5 * sr), np.float32), _tone(sr, 0.4, 150, 0.5)])
+    late[: int(0.5 * sr)] += _tone(sr, 0.5, 3000, 0.02)
+    assert f5_text.held_vowel_onset(late, sr, "Ottó") == 0.0

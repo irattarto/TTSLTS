@@ -245,7 +245,7 @@ class Reader:
                     wav = wav[int(vowel_onset(wav, sr) * sr) :].copy()
                 if self.strict_start:  # a loud "s" or breath of the filler still in front
                     vowel = starts_with_vowel(text)
-                    more = held_vowel_onset(wav, sr) if vowel else loud_scrap_end(wav, sr)
+                    more = held_vowel_onset(wav, sr, text) if vowel else loud_scrap_end(wav, sr)
                     wav = wav[int(more * sr) :].copy()
             if (filler and ok and not short) or check_start:  # listen to the new start
                 after = self.words(wav, sr)
