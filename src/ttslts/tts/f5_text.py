@@ -230,10 +230,16 @@ def short_filler_cut(words: list[tuple[str, float, float]], onset: float) -> flo
     return None
 
 
-def filler_joined(words: list[tuple[str, float, float]]) -> bool:
-    """Whether Whisper heard "nos" run into the next word ("Anosvinetú"): then there is no comma
-    pause after it to find, and a pause inside the word was taken for one ("vinetu" -> "tu")."""
-    return bool(words) and bool(re.search(r"nos[a-záéíóöőúüű]{2,}", letters(words[0][0])))
+def filler_joined(words: list[tuple[str, float, float]], filler: str = FILLER) -> bool:
+    """Whether Whisper heard the filler run into the next word ("Anosvinetú", "Hánozózsa" for
+    "no, zzsuzsa"): then there is no comma pause after it to find, a pause inside the word was taken
+    for one ("vinetu" -> "tu"), and a share guessed inside the joined word cut too early ("ano")."""
+    core = letters(filler).replace("o", "[oó]")
+    return (
+        bool(words)
+        and bool(core)
+        and bool(re.search(core + "[a-záéíóöőúüű]{2,}", letters(words[0][0])))
+    )
 
 
 def heard_enough(words: list[tuple[str, float, float]], text: str) -> bool:
@@ -480,6 +486,83 @@ def starts_with_sibilant(text: str) -> bool:
 def starts_with_vowel(text: str) -> bool:
     word = letters(first_word(text))
     return bool(word) and word[0] in VOWELS
+
+
+def _bands(audio, sr: int, window_s: float):
+    """Per 10 ms (25 ms frames) of the start: the 70-400 Hz hum and the 2-8 kHz hiss in dB."""
+    import numpy as np
+
+    win, hop = int(0.025 * sr), int(0.01 * sr)
+    n = (min(len(audio), int(window_s * sr)) - win) // hop + 1
+    if n < 3:
+        return None, None
+    idx = np.arange(win)[None, :] + hop * np.arange(n)[:, None]
+    frames = np.asarray(audio, dtype=np.float32)[idx] * np.hanning(win)
+    spec = np.abs(np.fft.rfft(frames, axis=1)) ** 2 + 1e-12
+    freq = np.fft.rfftfreq(win, 1 / sr)
+    hum = 10 * np.log10(spec[:, (freq > 70) & (freq < 400)].sum(axis=1))
+    hiss = 10 * np.log10(spec[:, (freq > 2000) & (freq < 8000)].sum(axis=1))
+    return hum, hiss
+
+
+def start_voicing(audio, sr: int, window_s: float = 0.15) -> float:
+    """How voiced the hiss at the start is: in the first ``window_s``, over the frames whose 2-8 kHz
+    hiss is within 6 dB of its loudest, the 70-400 Hz hum against that hiss (dB, mean). An "s" or
+    "sz" was -18 to -31, a good "zs" -1 to 10, a start with no hiss (a vowel: the sibilant left
+    out, "Szép" -> "ép") 13 and more."""
+    import numpy as np
+
+    hum, hiss = _bands(audio, sr, window_s)
+    if hum is None:
+        return 0.0
+    top = hiss >= hiss.max() - 6
+    return float(np.mean(hum[top] - hiss[top]))
+
+
+def start_hiss_length(audio, sr: int) -> float:
+    """From where the sound starts (hum or hiss within 25 dB of the loudest) to where the first
+    hiss (its loudest in the first 150 ms) falls 12 dB: the length of a start "zs". voice2's
+    stuttered "z-zsófi" was 160-270 ms, a good "zs" 70-150 ms. The whole window when it never
+    falls."""
+    import numpy as np
+
+    hum, hiss = _bands(audio, sr, 0.45)
+    if hum is None:
+        return 0.0
+    loud = np.maximum(hum, hiss)
+    start = int(np.argmax(loud >= loud.max() - 25))
+    peak = int(np.argmax(hiss[:15]))
+    fallen = hiss[peak:] < hiss[peak] - 12
+    end = peak + int(np.argmax(fallen)) if fallen.any() else len(hiss)
+    return (end - start) * 0.01
+
+
+ZS_VOICING = (-5.0, 12.0)  # voice2, 72 readings marked by ear: out of it 34 of 35 were wrong
+ZS_MAX_S = 0.15  # voice2: of those within ZS_VOICING, longer ones were 14 of 20 stuttered ("z-zs")
+HISS_VOICING_MAX = 0.0  # an "s" / "sz" start: above it the hiss is missing
+
+
+def sibilant_start_ok(audio, sr: int, text: str) -> bool:
+    """Whether a text starting with "zs", "sz" or "s" starts with that sound after the cut: "zs"
+    voiced ("Zsófi" was read "Sófi", or the filler's vowel was left), "s" / "sz" hissed (the "Sz" of
+    "Szép" was left out, Whisper still heard "szép") - and a "zs" not too long ("z-zsófi" was
+    stuttered). Other starts are not checked."""
+    if not right_start_sound(audio, sr, text):
+        return False
+    long_zs = start_hiss_length(audio, sr) > ZS_MAX_S + 1e-6
+    return not (letters(first_word(text)).startswith("zs") and long_zs)
+
+
+def right_start_sound(audio, sr: int, text: str) -> bool:
+    """The voicing part of ``sibilant_start_ok`` alone: when no reading passes, one with the right
+    sound (a too long "zs") is still better than "Sófi" (chosen for its melody: "s-szófi")."""
+    word = letters(first_word(text))
+    if word.startswith("zs"):
+        low, high = ZS_VOICING
+        return low <= start_voicing(audio, sr) <= high
+    if word.startswith("s"):
+        return start_voicing(audio, sr) <= HISS_VOICING_MAX
+    return True
 
 
 def vowel_onset(audio, sr: int, window_s: float = 0.8) -> float:

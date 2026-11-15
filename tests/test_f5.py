@@ -767,3 +767,30 @@ def test_a_voice_can_spell_a_starting_zs_its_own_way(tmp_path):
     assert f5_voices.start_zs(files) == ""
     files["options"].write_text('{"start_zs": "zzs", "strict_start": true}', "utf-8")
     assert f5_voices.start_zs(files) == "zzs" and f5_voices.strict_start(files)
+
+
+def test_the_filler_used_is_noticed_run_into_the_word():
+    assert f5_text.filler_joined([(" Hánozózsa", 0.0, 1.0)], "no, ")  # "no, zzsuzsa"
+    assert not f5_text.filler_joined([(" Ano", 0.0, 0.4), (" zsuzsa", 0.5, 1.0)], "no, ")
+    assert f5_text.filler_joined([(" Anosvinetú", 0.0, 0.9)])  # "nos, " by default
+
+
+def test_the_start_sound_of_zs_and_sz_is_measured():
+    sr = 24000
+    rng = np.random.default_rng(2)
+    hiss = (0.05 * rng.standard_normal(int(0.12 * sr))).astype(np.float32)
+    vowel = _tone(sr, 0.4, 150, 0.5)
+    zs = np.concatenate([hiss + _tone(sr, 0.12, 150, 0.1), vowel])  # hiss with a hum: voiced
+    s = np.concatenate([hiss, vowel])
+    assert f5_text.sibilant_start_ok(zs, sr, "zsófi a kertben várt.")
+    assert not f5_text.sibilant_start_ok(s, sr, "zsófi a kertben várt.")  # "Sófi"
+    assert not f5_text.sibilant_start_ok(vowel, sr, "zsófi a kertben várt.")  # the "zs" left out
+    assert f5_text.sibilant_start_ok(s, sr, "szép napunk van ma.")
+    assert not f5_text.sibilant_start_ok(vowel, sr, "szép napunk van ma.")  # "ép napunk"
+    assert f5_text.sibilant_start_ok(vowel, sr, "a rózsa.")  # other starts: not checked
+    hum = _tone(sr, 0.25, 150, 0.1)
+    noise = (0.05 * rng.standard_normal(len(hum))).astype(np.float32)
+    long_zs = np.concatenate([noise + hum, vowel])
+    assert f5_text.start_hiss_length(zs, sr) == pytest.approx(0.12, abs=0.03)
+    assert not f5_text.sibilant_start_ok(long_zs, sr, "zsuzsa nevetett.")  # "z-zsuzsa"
+    assert f5_text.right_start_sound(long_zs, sr, "zsuzsa nevetett.")  # still better than "Suzsa"

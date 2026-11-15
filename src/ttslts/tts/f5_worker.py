@@ -19,6 +19,7 @@ import time
 import traceback
 
 TRIES = 2  # readings per sentence when the start comes out wrong or the melody flat
+SIBILANT_TRIES = 4  # strict start, "zs" / "sz" / "s" start: half of voice2's "Zsófi" came out wrong
 WHISPER_S = 3.0  # only the start is transcribed: enough to find the first two words
 
 
@@ -169,8 +170,12 @@ class Reader:
             loud_scrap_end,
             melody_range,
             pause_cut,
+            right_start_sound,
             short_filler_cut,
             shorten_pauses,
+            sibilant_start_ok,
+            start_hiss_length,
+            start_voicing,
             starts_with_sibilant,
             starts_with_text,
             starts_with_vowel,
@@ -186,12 +191,15 @@ class Reader:
         # next word after "nos", or at the comma's pause: the word itself is not looked for, as
         # Whisper hears a lone spelled-out word as anything ("écsbí ó" -> "HBU")
         short = len(text) < NO_FILLER_CHARS
+        respelled = bool(self.start_zs) and text[:2] == "zs"
         said = text  # what the model is given; ``text`` stays for the checks
-        if self.start_zs and text[:2] == "zs":  # voice2: "Sófi" at the start, "zzs" helps
+        if respelled:  # voice2: "Sófi" at the start, "zzs" helps
             said = self.start_zs + text[2:]
         filler = FILLER if self.filler else ""
-        if filler and self.sibilant_filler and starts_with_sibilant(text):
+        if filler and self.sibilant_filler and starts_with_sibilant(text) and not respelled:
             filler = self.sibilant_filler  # voice2: "no, " - the "s" of "nos" ran into "sz"
+        # a "zzs" start keeps "nos, ": "no, zzsuzsa" was heard as one word ("Hánozózsa") in 2 of
+        # 4 readings and cut too early ("ano zsuzsa"); "nos, zzsuzsa" came apart in all 4
         fix_duration = None
         if short:
             per_byte = self.ref_seconds / self.ref_bytes / max(speed, 0.1)
@@ -201,7 +209,9 @@ class Reader:
         # a voice without the filler: its start is still checked by listening, and read again
         # when a stray sound comes before the first word
         check_start = not self.filler and not short
-        for attempt in range(TRIES):
+        first = letters(first_word(text))
+        measured = bool(self.strict_start and filler) and first.startswith(("zs", "s"))
+        for attempt in range(SIBILANT_TRIES if measured else TRIES):
             t0 = time.perf_counter()
             seed_everything(seed + 1000 * attempt)
             wav, sr, _ = infer_process(
@@ -224,9 +234,9 @@ class Reader:
                 cut, found = filler_cut(words, text)
                 # "Anosvinetú" heard as one word: the share guessed inside it cut too early ("Ano"
                 # stayed); read again instead, as before
-                if not found or cut > onset + FILLER_MAX_S or filler_joined(words):
+                if not found or cut > onset + FILLER_MAX_S or filler_joined(words, filler):
                     cut = short_filler_cut(words, onset)
-                if cut is None and not filler_joined(words):
+                if cut is None and not filler_joined(words, filler):
                     cut = pause_cut(wav, sr)
                 if cut is not None and keep_enough(cut, len(wav) / sr, text) != cut:
                     cut = None  # it would take most of the text away: a pause inside a word
@@ -280,6 +290,15 @@ class Reader:
             soft = filler and not starts_with_vowel(text)  # a vowel start is cut close: short fade
             fade = min(len(wav), int((0.05 if soft else 0.01) * sr))
             wav[:fade] *= np.linspace(0, 1, fade, dtype=np.float32)
+            # Whisper hears "Sófi" as "Zsófi" and "ép" as "szép": the start sound is measured (as
+            # it will be heard, faded in)
+            if filler and ok and self.strict_start and not sibilant_start_ok(wav, sr, text):
+                ok = False
+                print(
+                    f"start sound: voicing {start_voicing(wav, sr):.1f} dB, "
+                    f"hiss {start_hiss_length(wav, sr) * 1000:.0f} ms",
+                    file=sys.stderr,
+                )
             wav = wav[: len(wav) - int(trailing_silence(wav, sr) * sr)]  # pauses: the app's own
             wav = shorten_pauses(wav, sr)
             melody = melody_range(wav, sr)
@@ -289,10 +308,12 @@ class Reader:
                 f"cut at {cut:.2f} s, start {verdict}, melody {melody:.1f} st (try {attempt + 1})",
                 file=sys.stderr,
             )
-            readings.append((ok, melody, wav))
-            if ok and is_lively(melody, text):
-                break
-        ok, melody, wav = max(readings, key=lambda r: (r[0], r[1]))  # a good start, then melody
+            near = not measured or right_start_sound(wav, sr, text)
+            readings.append((ok, near, melody, wav))
+            if ok and (is_lively(melody, text) or attempt + 1 >= TRIES):
+                break  # the tries over TRIES are for a wrong start sound only
+        # a good start, then the right start sound, then melody
+        ok, _near, melody, wav = max(readings, key=lambda r: r[:3])
         return ok, melody, wav, sr
 
 
