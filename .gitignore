@@ -24,3 +24,4 @@ android/app/src/main/jniLibs/
 # Local work files and finished extras (audio, training, measurements): never committed.
 /work/
 /final/
+/trash/
