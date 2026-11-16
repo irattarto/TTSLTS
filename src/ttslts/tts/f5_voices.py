@@ -54,11 +54,7 @@ def voice_dir(voice_id: str, base: Path | None = None) -> Path:
 
 
 def voice_files(voice_id: str, base: Path | None = None) -> dict[str, Path]:
-    folder = voice_dir(voice_id, base)
-    keys = ("model", "vocab", "ref_audio", "ref_text")
-    files = {key: folder / name for key, name in zip(keys, FILES, strict=True)}
-    files["options"] = folder / OPTIONS
-    return files
+    return folder_files(voice_dir(voice_id, base))
 
 
 def _options(files: dict[str, Path]) -> dict:
@@ -92,25 +88,35 @@ def strict_start(files: dict[str, Path]) -> bool:
     return _options(files).get("strict_start") is True
 
 
+def folder_files(folder: Path) -> dict[str, Path]:
+    """The files of a voice in any folder (as ``voice_files``), e.g. one a training saved."""
+    keys = ("model", "vocab", "ref_audio", "ref_text")
+    files = {key: folder / name for key, name in zip(keys, FILES, strict=True)}
+    files["options"] = folder / OPTIONS
+    return files
+
+
+def is_voice_folder(folder: Path) -> bool:
+    return folder.is_dir() and all((folder / name).is_file() for name in FILES)
+
+
 def installed_voices(base: Path | None = None) -> list[str]:
     folder = voices_dir(base)
     if not folder.is_dir():
         return []
-    return sorted(
-        PREFIX + d.name for d in folder.iterdir() if all((d / name).is_file() for name in FILES)
-    )
+    return sorted(PREFIX + d.name for d in folder.iterdir() if is_voice_folder(d))
 
 
 def display_name(voice_id: str) -> str:
     return f"{voice_id[len(PREFIX) :]} (own F5 voice)"
 
 
-def add_voice(model: str | Path, base: Path | None = None) -> str:
+def add_voice(model: str | Path, base: Path | None = None, name: str | None = None) -> str:
     """Copy an F5 voice into the voices folder; returns its id.
 
     ``model`` is the ``.safetensors`` file; ``vocab.txt``, ``reference.wav`` and
     ``reference.txt`` must be next to it. The voice is named after that folder
-    ("voice1-f5" -> "voice1").
+    ("voice1-f5" -> "voice1") unless ``name`` is given.
     """
     model = Path(model)
     if model.suffix.lower() != ".safetensors" or not model.is_file():
@@ -124,7 +130,7 @@ def add_voice(model: str | Path, base: Path | None = None) -> str:
         )
     if not (folder / "reference.txt").read_text(encoding="utf-8").strip():
         raise NotAnF5Voice("reference.txt is empty: it must hold the voice sample's exact text")
-    name = re.sub(r"[-_ ]?f5$", "", folder.name, flags=re.IGNORECASE)
+    name = name or re.sub(r"[-_ ]?f5$", "", folder.name, flags=re.IGNORECASE)
     name = re.sub(r"[^\w.-]+", "-", name).strip("-.") or "voice"
     target = voices_dir(base) / name
     tmp = target.with_name(name + ".part")

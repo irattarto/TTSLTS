@@ -51,6 +51,12 @@ class Controller(QObject):
     f5PrepStage = Signal(str)
     f5PrepProgress = Signal(float)
     f5PrepFinished = Signal(str, bool)  # measured.json (empty when stopped/failed), finished
+    f5TrainRunning = Signal(bool)
+    f5TrainStage = Signal(str)
+    f5TrainProgress = Signal(dict)
+    f5TrainSaved = Signal(str, int)  # a voice to listen to: its folder, the update it was saved at
+    f5TrainFinished = Signal(bool)  # finished (False: stopped or failed)
+    f5CandidateInstalled = Signal(str)  # the voice id
 
     def __init__(self, settings: Settings, save: Callable[[Settings], None] | None = None):
         super().__init__()
@@ -320,7 +326,7 @@ class Controller(QObject):
         from ttslts.train import hparams, pretrained, runtime
 
         s = self.settings
-        if self.training:
+        if self.training or self.f5_training or self.f5_preparing:
             return
         if not self.training_runtime_ready():
             self.error.emit("The training environment is not set up yet.")
@@ -512,7 +518,7 @@ class Controller(QObject):
         stopped run of the same name; the recordings must stay the same)."""
         from ttslts.tts import f5_runtime
 
-        if self.f5_preparing or self.training:
+        if self.f5_preparing or self.training or self.f5_training:
             return
         if not self.f5_training_ready():
             self.error.emit("The tools for training F5 voices are not set up yet.")
@@ -617,6 +623,154 @@ class Controller(QObject):
             devices.play(audio, sr, devices.resolve(self.settings.tts_output_device, "output"))
 
         self._background(work, "play-clip")
+
+    # -- own F5 voices: training ------------------------------------------
+    @property
+    def f5_training(self) -> bool:
+        proc = getattr(self, "_f5_train_proc", None)
+        return proc is not None and proc.poll() is None
+
+    def start_f5_train(self, name: str, epochs: int, save_every: int) -> None:
+        """Train the own F5 voice ``name`` on its chosen sentences (goes on where a stopped run
+        of it stopped)."""
+        from ttslts.tts import f5_runtime
+
+        if self.f5_training or self.f5_preparing or self.training:
+            return
+        work = self.f5_prep_dir(name)
+        if not (work / "selection.json").exists():
+            self.error.emit("Prepare the recordings and check the sentences first.")
+            return
+        train = work / "train"
+        train.mkdir(parents=True, exist_ok=True)
+        job = {
+            "work_dir": str(work),
+            "base_dir": str(paths.models_dir() / "f5-base"),
+            "epochs": int(epochs),
+            "save_every": int(save_every),
+        }
+        job_file = train / "train.json"
+        job_file.write_text(json.dumps(job, indent=2), encoding="utf-8")
+        log_file = open(train / "train.log", "a", encoding="utf-8")  # closed by the reader
+        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        try:
+            proc = subprocess.Popen(
+                [*f5_runtime.python_command(), "-u", "-m", "ttslts.train.f5_train", str(job_file)],
+                stdout=subprocess.PIPE,
+                stderr=log_file,
+                text=True,
+                encoding="utf-8",
+                creationflags=flags,
+                env={
+                    **os.environ,
+                    "PYTHONIOENCODING": "utf-8",
+                    "HF_HOME": str(paths.models_dir() / "hf"),
+                    "ACCELERATE_MIXED_PRECISION": "bf16",
+                    **f5_runtime.prepare_for_run(),
+                },
+            )
+        except OSError as exc:
+            log_file.close()
+            self.error.emit(f"Could not start: {exc}")
+            return
+        self._f5_train_proc, self._f5_train_work = proc, train
+        self._release_gpu_models()
+        self.f5TrainRunning.emit(True)
+        threading.Thread(
+            target=self._read_f5_train, args=(proc, log_file, train), daemon=True, name="f5-train"
+        ).start()
+
+    def _read_f5_train(self, proc: subprocess.Popen, log_file, train: Path) -> None:
+        done, ended, last_error = False, False, ""
+        try:
+            for line in proc.stdout:
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                kind = event.get("type")
+                if kind == "stage":
+                    self.f5TrainStage.emit(event.get("text", ""))
+                elif kind == "progress":
+                    self.f5TrainProgress.emit(event)
+                elif kind == "saved":
+                    self.f5TrainSaved.emit(event.get("folder", ""), int(event.get("update", 0)))
+                elif kind == "done":
+                    done = ended = True
+                elif kind == "stopped":
+                    ended = True
+                elif kind == "error":
+                    last_error = event.get("message", "")
+            proc.wait()
+        finally:
+            log_file.close()
+            self._f5_train_proc = None
+            self.f5TrainRunning.emit(False)
+        self.f5TrainFinished.emit(done)
+        if not ended:
+            why = last_error or "the process ended unexpectedly"
+            self.error.emit(
+                f"Training the F5 voice stopped: {why}\n\nDetails: {train / 'train.log'}"
+            )
+
+    def stop_f5_train(self) -> None:
+        """Ask the F5 training to stop; it saves where it is first, the next start goes on from
+        there."""
+        train = getattr(self, "_f5_train_work", None)
+        if self.f5_training and train is not None:
+            (train / "STOP").write_text("stop", encoding="utf-8")
+            self.f5TrainStage.emit("Stopping after saving…")
+
+    @classmethod
+    def f5_candidates(cls, name: str) -> list[Path]:
+        """The voices the F5 training of ``name`` saved so far, oldest first."""
+        from ttslts.tts import f5_voices
+
+        folder = cls.f5_prep_dir(name) / "train" / "voices"
+        if not folder.is_dir():
+            return []
+        found = [d for d in folder.iterdir() if f5_voices.is_voice_folder(d)]
+        return sorted(found, key=lambda d: (d.name == "last", d.name))
+
+    def listen_f5_candidate(self, folder: Path, text: str) -> None:
+        """Read ``text`` with a voice the training saved (loaded for this once, then freed)."""
+        from ttslts.tts import f5_runtime, f5_voices
+        from ttslts.tts.f5_engine import F5Voice
+
+        if self.f5_training:
+            self.error.emit("Listen when the training is stopped: it uses the graphics card.")
+            return
+
+        def work():
+            with self._lock:
+                self._close_f5()
+            self.status.emit(f"Loading {Path(folder).name} (takes up to a minute)…")
+            voice = F5Voice(
+                f5_runtime.python_command(),
+                f5_runtime.prepare_for_run(),
+                f5_voices.folder_files(Path(folder)),
+                gpu=self.gpu_allowed(),
+            )
+            try:
+                self.status.emit(f"Reading with {Path(folder).name}…")
+                audio, sr = voice.synthesize(text, self.settings.tts_speed)
+            finally:
+                voice.close()
+            self.status.emit("")
+            devices.play(audio, sr, devices.resolve(self.settings.tts_output_device, "output"))
+
+        self._background(work, "f5-listen", once=True)
+
+    def install_f5_candidate(self, folder: Path, name: str) -> None:
+        """Install a voice the training saved as the own F5 voice ``name``."""
+        from ttslts.tts import f5_voices
+
+        def work():
+            voice_id = f5_voices.add_voice(Path(folder) / "model.safetensors", name=name)
+            self.f5CandidateInstalled.emit(voice_id)
+            self.status.emit(f"Installed the F5 voice {name}")
+
+        self._background(work, "f5-install", once=True)
 
     # -- text to speech --------------------------------------------------
     def render_tts(

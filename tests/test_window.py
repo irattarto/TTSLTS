@@ -323,3 +323,38 @@ def test_train_tab_makes_an_f5_voice_in_steps(make_window, monkeypatch):
     f5_data.save_selection(work, "normal", clips, f5_data.select(clips))
     w._f5_update_choice()
     assert "Chosen:" in w.f5_choice_label.text()
+
+    # 3. training, 4. saved voices
+    assert w.f5_train_btn.isEnabled() and not w.f5_listen_btn.isEnabled()
+    started = []
+    monkeypatch.setattr(w.controller, "start_f5_train", lambda *a: started.append(a))
+    w.f5_epochs_spin.setValue(30)
+    w.f5_train_btn.click()
+    assert started == [(w._train_name(), 30, 1000)] and w.settings.f5_train_epochs == 30
+    monkeypatch.setattr(type(w.controller), "f5_training", property(lambda _self: True))
+    w.controller.f5TrainRunning.emit(True)
+    assert not w.f5_train_btn.isEnabled() and w.f5_train_stop_btn.isEnabled()
+    assert not w.f5_prep_btn.isEnabled() and not w.train_kind_combo.isEnabled()
+    w.controller.f5TrainProgress.emit(
+        {"stage": "train", "fraction": 0.5, "update": 500, "updates": 1000, "epoch": 15,
+         "epochs": 30}
+    )  # fmt: skip
+    assert w.train_bar.value() == 500 and "Step 500 of 1000" in w.train_status.text()
+    folder = work / "train" / "voices" / "u001000"
+    folder.mkdir(parents=True)
+    for name in ("model.safetensors", "vocab.txt", "reference.wav", "reference.txt"):
+        (folder / name).write_text("x", encoding="utf-8")
+    w.controller.f5TrainSaved.emit(str(folder), 1000)
+    assert w.f5_cand_combo.currentText() == "after step 1000"
+    monkeypatch.setattr(type(w.controller), "f5_training", property(lambda _self: False))
+    w.controller.f5TrainRunning.emit(False)
+    w.controller.f5TrainFinished.emit(False)
+    assert "Stopped" in w.train_status.text() and w.f5_train_btn.isEnabled()
+    heard, installed = [], []
+    monkeypatch.setattr(w.controller, "listen_f5_candidate", lambda f, t: heard.append((f, t)))
+    monkeypatch.setattr(w.controller, "install_f5_candidate", lambda f, n: installed.append((f, n)))
+    assert w.f5_listen_btn.isEnabled()
+    w.f5_listen_btn.click()
+    w.f5_install_btn.click()
+    assert heard and heard[0][0] == folder and "Szép" in heard[0][1]
+    assert installed == [(folder, w._train_name())]

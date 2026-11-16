@@ -187,6 +187,12 @@ class MainWindow(QMainWindow):
         c.f5PrepStage.connect(self._on_train_stage)
         c.f5PrepProgress.connect(self._on_f5_prep_progress)
         c.f5PrepFinished.connect(self._on_f5_prep_finished)
+        c.f5TrainRunning.connect(self._on_f5_train_running)
+        c.f5TrainStage.connect(self._on_train_stage)
+        c.f5TrainProgress.connect(self._on_f5_train_progress)
+        c.f5TrainSaved.connect(self._on_f5_train_saved)
+        c.f5TrainFinished.connect(self._on_f5_train_finished)
+        c.f5CandidateInstalled.connect(self._on_f5_candidate_installed)
 
     # -- tabs ------------------------------------------------------------
     def _build_tts_tab(self) -> QWidget:
@@ -490,6 +496,65 @@ class MainWindow(QMainWindow):
         self.f5_choice_label.setWordWrap(True)
         self.f5_choice_label.setStyleSheet("color: gray;")
         layout.addWidget(self.f5_choice_label)
+
+        s = self.settings
+        row = QHBoxLayout()
+        row.addWidget(QLabel("Train for"))
+        self.f5_epochs_spin = QSpinBox(minimum=1, maximum=500, suffix=" epochs")
+        self.f5_epochs_spin.setValue(s.f5_train_epochs)
+        self.f5_epochs_spin.setToolTip(
+            "How many times the training goes over all chosen sentences. The first own voices "
+            "used 40 (about 10 000 steps for 2 hours of sentences, most of a day)."
+        )
+        row.addWidget(self.f5_epochs_spin)
+        row.addWidget(QLabel("save a voice every"))
+        self.f5_save_spin = QSpinBox(minimum=250, maximum=20000, singleStep=250, suffix=" steps")
+        self.f5_save_spin.setValue(s.f5_save_every)
+        self.f5_save_spin.setToolTip(
+            "Every this many steps the voice is saved so you can listen to it (0.7 GB each); "
+            "a later one is not always better"
+        )
+        row.addWidget(self.f5_save_spin)
+        self.f5_train_btn = QPushButton("3. Train the voice")
+        self.f5_train_btn.setToolTip(
+            "Teach the Hungarian F5 voice to read like the chosen sentences. Uses the graphics "
+            "card for hours; a stopped training goes on where it stopped."
+        )
+        self.f5_train_btn.clicked.connect(self._f5_train_start)
+        self.f5_train_stop_btn = QPushButton("Stop")
+        self.f5_train_stop_btn.setToolTip("Stop after saving where the training is")
+        self.f5_train_stop_btn.setEnabled(False)
+        self.f5_train_stop_btn.clicked.connect(self.controller.stop_f5_train)
+        row.addWidget(self.f5_train_btn)
+        row.addWidget(self.f5_train_stop_btn)
+        row.addStretch(1)
+        layout.addLayout(row)
+
+        row = QHBoxLayout()
+        row.addWidget(QLabel("4. Saved voices"))
+        self.f5_cand_combo = QComboBox()
+        self.f5_cand_combo.setToolTip(
+            "The voices the training saved; listen to some and install one"
+        )
+        row.addWidget(self.f5_cand_combo, 1)
+        self.f5_listen_btn = QPushButton("Listen")
+        self.f5_listen_btn.setToolTip("Read the sentence below with the chosen saved voice")
+        self.f5_listen_btn.clicked.connect(self._f5_listen)
+        self.f5_install_btn = QPushButton("Install")
+        self.f5_install_btn.setToolTip(
+            "Install the chosen saved voice under the voice name above; then it is in the "
+            "Text to speech voice list"
+        )
+        self.f5_install_btn.clicked.connect(self._f5_install)
+        row.addWidget(self.f5_listen_btn)
+        row.addWidget(self.f5_install_btn)
+        layout.addLayout(row)
+        self.f5_listen_edit = QLineEdit(
+            "Szép napunk van ma: a zsákban sárga szőlő, zöld szilva és ropogós cseresznye van."
+        )
+        self.f5_listen_edit.setToolTip("What the saved voices read when you listen to them")
+        layout.addWidget(self.f5_listen_edit)
+        self._f5_train_clock: tuple[float, int] | None = None
         return box
 
     def _train_kind_changed(self, _index: int | None = None) -> None:
@@ -499,6 +564,7 @@ class MainWindow(QMainWindow):
         self.train_intro.setText(self.TRAIN_INTROS[kind])
         self.train_rvc_box.setVisible(kind == "rvc")
         self.train_f5_box.setVisible(kind == "f5")
+        self._f5_refresh_candidates()
         ready = self.controller.training_runtime_ready()
         self.train_setup_hint.setVisible(kind == "rvc" and not ready)
         self._f5_update_choice()
@@ -511,8 +577,10 @@ class MainWindow(QMainWindow):
 
         work = self._f5_work()
         measured = (work / "measured.json").exists()
-        self.f5_check_btn.setEnabled(measured and not self.controller.f5_preparing)
+        busy = self.controller.f5_preparing or self.controller.f5_training
+        self.f5_check_btn.setEnabled(measured and not busy)
         saved = f5_data.load_selection(work)
+        self.f5_train_btn.setEnabled(bool(saved) and not busy and not self._train_busy)
         if saved:
             r = saved["report"]
             self.f5_choice_label.setText(
@@ -585,6 +653,118 @@ class MainWindow(QMainWindow):
         if done:
             self.train_status.setText("The recordings are prepared: check the sentences.")
             self._f5_check()
+
+    def _f5_train_start(self) -> None:
+        name = self._train_name()
+        self.train_name_edit.setText(name)
+        self._set("train_name", name)
+        self._set("f5_train_epochs", self.f5_epochs_spin.value())
+        self._set("f5_save_every", self.f5_save_spin.value())
+        self.train_log.clear()
+        self._f5_train_clock = None
+        self.controller.start_f5_train(name, self.f5_epochs_spin.value(), self.f5_save_spin.value())
+
+    def _on_f5_train_running(self, running: bool) -> None:
+        self.f5_train_stop_btn.setEnabled(running)
+        for widget in (
+            self.f5_prep_btn,
+            self.train_add_btn,
+            self.train_remove_btn,
+            self.train_files,
+            self.train_name_edit,
+            self.train_kind_combo,
+            self.f5_epochs_spin,
+            self.f5_save_spin,
+            self.f5_listen_btn,
+            self.f5_install_btn,
+        ):
+            widget.setEnabled(not running)
+        self.train_start_btn.setEnabled(not running and not self._train_busy)
+        self._f5_update_choice()
+        if not running:
+            self._f5_refresh_candidates()
+
+    def _on_f5_train_progress(self, event: dict) -> None:
+        import time
+
+        self.train_bar.setValue(int(event.get("fraction", 0) * 1000))
+        update, updates = event.get("update"), event.get("updates")
+        if not update or not updates:
+            return
+        now = time.monotonic()
+        if self._f5_train_clock is None:
+            self._f5_train_clock = (now, update)
+        start, first = self._f5_train_clock
+        text = f"Step {update} of {updates} (epoch {event.get('epoch')}/{event.get('epochs')})"
+        if update - first >= 20:
+            left = (now - start) / (update - first) * (updates - update)
+            text += (
+                f" - about {left / 3600:.1f} hours left"
+                if left > 5400
+                else (f" - about {int(left // 60)} min left")
+            )
+        self.train_status.setText(text)
+
+    def _on_f5_train_saved(self, folder: str, update: int) -> None:
+        self.train_log.appendPlainText(f"Saved a voice to listen to after step {update}")
+        self._f5_refresh_candidates(select=folder)
+
+    def _on_f5_train_finished(self, done: bool) -> None:
+        self._f5_refresh_candidates()
+        if done:
+            self.train_bar.setValue(1000)
+            self.train_status.setText("Done: listen to the saved voices and install the best one.")
+        else:
+            self.train_status.setText(
+                "Stopped. Listen to the saved voices, or train on: it goes on where it stopped."
+            )
+
+    def _f5_refresh_candidates(self, select: str = "") -> None:
+        current = select or self.f5_cand_combo.currentData() or ""
+        self.f5_cand_combo.clear()
+        for folder in self.controller.f5_candidates(self._train_name()):
+            label = (
+                "at the end"
+                if folder.name == "last"
+                else f"after step {int(folder.name.lstrip('u'))}"
+            )
+            self.f5_cand_combo.addItem(label, str(folder))
+        if current:
+            self.f5_cand_combo.setCurrentIndex(max(0, self.f5_cand_combo.findData(str(current))))
+        else:
+            self.f5_cand_combo.setCurrentIndex(self.f5_cand_combo.count() - 1)
+        has = self.f5_cand_combo.count() > 0 and not self.controller.f5_training
+        self.f5_listen_btn.setEnabled(has)
+        self.f5_install_btn.setEnabled(has)
+
+    def _f5_listen(self) -> None:
+        folder = self.f5_cand_combo.currentData()
+        text = self.f5_listen_edit.text().strip()
+        if folder and text:
+            self.controller.listen_f5_candidate(Path(folder), text)
+
+    def _f5_install(self) -> None:
+        from ttslts.tts import f5_voices
+
+        folder = self.f5_cand_combo.currentData()
+        if not folder:
+            return
+        name = self._train_name()
+        if f5_voices.PREFIX + name in f5_voices.installed_voices():
+            answer = QMessageBox.question(
+                self,
+                APP_NAME,
+                f"An F5 voice called {name} is already installed. Replace it?",
+            )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        self.controller.install_f5_candidate(Path(folder), name)
+
+    def _on_f5_candidate_installed(self, voice_id: str) -> None:
+        self._refresh_voice_combos()
+        self.train_status.setText(
+            f"Installed: choose {voice_id[len('f5:') :]} on the Text to speech tab to use it."
+        )
 
     def _f5_check(self) -> None:
         from ttslts.ui.f5_review_dialog import F5ReviewDialog

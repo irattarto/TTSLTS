@@ -80,6 +80,8 @@ to its F5 environment and downloads, now or on first use:
     Hugging Face: it tells the narrator's own voice from the characters he or she plays
   - Whisper large-v3 and large-v3-turbo (MIT), from Hugging Face: they write the recordings
     down (about 4.6 GB together, into the TTSLTS models folder)
+  - when the training starts: the Hungarian F5 base model (CC BY-NC 4.0, non-commercial use
+    only), from Hugging Face (about 0.7 GB): the own voice is trained from it
 
 Only use recordings of a voice you have permission to use."""
 

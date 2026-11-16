@@ -235,3 +235,34 @@ def load_selection(work) -> dict | None:
 
     path = Path(work, SELECTION)
     return json.loads(path.read_text(encoding="utf-8")) if path.exists() else None
+
+
+# -- the training step (``train.f5_train``) ------------------------------------------------------
+REF_S = (6.0, 10.0)  # a reference sample this long reads best (5-15 s works)
+
+
+def training_text(text: str, vocab: set[str]) -> str:
+    """A sentence's text as the voice is trained on it: as the app writes a text before reading it
+    (numbers and abbreviations written out), lowercased and kept to the vocabulary."""
+    from ttslts.tts.f5_text import prepare_text
+    from ttslts.tts.hu_numbers import spell_numbers
+    from ttslts.tts.hu_text import normalize_hungarian, spell_acronyms
+
+    return prepare_text(spell_numbers(spell_acronyms(normalize_hungarian(text))), vocab)
+
+
+def pick_reference(clips: list[dict], kept: set[str]) -> dict:
+    """The kept sentence the voice reads with: 6-10 s if there is one, its text agreed by both
+    Whisper models, the steadiest and most narrator-like of those."""
+    pool = [c for c in clips if c["name"] in kept]
+    if not pool:
+        raise ValueError("No sentence is kept.")
+
+    def score(c: dict) -> tuple:
+        lo, hi = REF_S
+        fits = lo <= c.get("dur", 0) <= hi
+        sure = c.get("agree", 1.0) >= AGREE_OK
+        wob = c.get("wobble")
+        return (fits, sure, c.get("sim", 0.0) - 0.01 * (wob if wob is not None else 50.0))
+
+    return max(pool, key=score)
