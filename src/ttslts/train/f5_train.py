@@ -235,7 +235,7 @@ def run_job(job: dict) -> Path:
     )  # fmt: skip
     emit(type="stage", stage="train", text="Training the voice…")
     t.train(data, num_workers=WORKERS, resumable_with_seed=666)
-    if t.is_main:
+    if t.is_main and not (voices / f"u{state['update']:06d}").is_dir():  # not saved just now
         export_voice(t.ema_model.state_dict(), vocab, work, voices / "last")
         emit(type="saved", update=state["update"], folder=str(voices / "last"))
     return voices
@@ -259,13 +259,18 @@ def _progress_bar(t, epochs: int, stop_file: Path, state: dict):
             if stop_file.exists():
                 t.save_checkpoint(done, last=True)
                 raise Stopped
-            if done % 5 == 0 or self.n == self.per_epoch:
-                emit(type="progress", stage="train", fraction=min(1.0, done / max(1, updates)),
-                     update=done, updates=updates, epoch=self.epoch, epochs=epochs,
-                     loss=self.loss)  # fmt: skip
+            self.report = done % 5 == 0 or self.n == self.per_epoch
+            self.updates = updates
 
         def set_postfix(self, loss=None, **_kw):
+            """Called by F5 right after ``update`` with that update's loss: reported here."""
             self.loss = round(float(loss), 4) if loss is not None else None
+            if getattr(self, "report", False):
+                done = state["update"]
+                emit(type="progress", stage="train", fraction=min(1.0, done / max(1, self.updates)),
+                     update=done, updates=self.updates, epoch=self.epoch, epochs=epochs,
+                     loss=self.loss)  # fmt: skip
+                self.report = False
 
         def close(self):
             pass

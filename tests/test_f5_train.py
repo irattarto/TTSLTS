@@ -47,9 +47,10 @@ def test_the_progress_bar_reports_and_stops_after_saving(tmp_path, capsys):
     stop = tmp_path / "STOP"
     Bar = f5_train._progress_bar(t, 2, stop, state)
     bar = Bar(range(10), desc="Epoch 2/2", initial=3)  # a resumed second epoch
-    bar.set_postfix(update="13", loss=0.61234)
+    bar.update(1)  # as F5 calls it: update, then the loss of that update
+    bar.set_postfix(update="14", loss=0.7)
     bar.update(1)
-    bar.update(1)
+    bar.set_postfix(update="15", loss=0.61234)
     events = [json.loads(line) for line in capsys.readouterr().out.splitlines()]
     assert state["update"] == 15
     assert events[-1]["update"] == 15 and events[-1]["updates"] == 20
