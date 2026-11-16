@@ -358,3 +358,17 @@ def test_train_tab_makes_an_f5_voice_in_steps(make_window, monkeypatch):
     w.f5_install_btn.click()
     assert heard and heard[0][0] == folder and "Szép" in heard[0][1]
     assert installed == [(folder, w._train_name())]
+
+
+def test_a_voice_changer_voice_can_learn_from_the_f5_sentences(make_window, monkeypatch):
+    w = make_window()
+    jobs = []
+    monkeypatch.setattr(w, "_train_continue", jobs.append)
+    w.train_start_btn.click()
+    assert jobs[-1][3] is False  # from the listed recordings
+    w.train_source_combo.setCurrentIndex(w.train_source_combo.findData("f5"))
+    assert w.settings.train_source == "f5"
+    w.train_start_btn.click()
+    assert jobs[-1][3] is True
+    w.controller.trainRunning.emit(True)
+    assert not w.train_source_combo.isEnabled() and not w.train_kind_combo.isEnabled()

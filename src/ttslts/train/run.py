@@ -40,12 +40,11 @@ def run_job(job: dict) -> None:
 
     if not resume:
         emit(type="stage", stage="prepare", text="Cutting the recordings into clips…")
-        count = prepare.prepare_audio(
-            job["files"],
-            cfg.sample_rate,
-            work,
-            lambda f: emit(type="progress", stage="prepare", fraction=f),
-        )
+        report = lambda f: emit(type="progress", stage="prepare", fraction=f)  # noqa: E731
+        if job.get("spans"):  # the sentences chosen for an own F5 voice
+            count = prepare.prepare_spans(job["spans"], cfg.sample_rate, work, report)
+        else:
+            count = prepare.prepare_audio(job["files"], cfg.sample_rate, work, report)
         emit(type="stage", stage="features", text=f"Analysing {count} clips…")
         from ttslts.onnx_util import make_session
         from ttslts.vc.rvc import ContentVec, RmvpePitch

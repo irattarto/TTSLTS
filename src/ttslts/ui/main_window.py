@@ -373,6 +373,21 @@ class MainWindow(QMainWindow):
             lambda: self._set("train_name", self._train_name())
         )
         form.addRow("Voice name", self.train_name_edit)
+        self.train_source_combo = QComboBox()
+        self.train_source_combo.addItem("the recordings listed above", "files")
+        self.train_source_combo.addItem("the sentences chosen for the F5 voice", "f5")
+        self.train_source_combo.setCurrentIndex(
+            max(0, self.train_source_combo.findData(s.train_source))
+        )
+        self.train_source_combo.currentIndexChanged.connect(
+            lambda i: self._set("train_source", self.train_source_combo.itemData(i))
+        )
+        self.train_source_combo.setToolTip(
+            "The sentences chosen for the F5 voice of the same name (Make a text-to-speech voice, "
+            "steps 1-2) are only the narrator's own calm voice, without the characters he or she "
+            "plays: a voice changer voice learns that voice better than from whole recordings"
+        )
+        form.addRow("Train on", self.train_source_combo)
         self.train_sr_combo = QComboBox()
         for rate in (32000, 40000, 48000):
             self.train_sr_combo.addItem(f"{rate // 1000} kHz", rate)
@@ -1261,7 +1276,7 @@ class MainWindow(QMainWindow):
 
                 shutil.rmtree(paths.train_dir() / name, ignore_errors=True)
 
-        self._train_continue((files, name, resume))
+        self._train_continue((files, name, resume, self.train_source_combo.currentData() == "f5"))
 
     def _train_continue(self, job: tuple) -> None:
         """Set up what training still needs (environment, pretrained models), then start it."""
@@ -1336,6 +1351,8 @@ class MainWindow(QMainWindow):
             self.train_epochs_spin,
             self.train_batch_spin,
             self.train_save_spin,
+            self.train_source_combo,
+            self.train_kind_combo,
         ):
             widget.setEnabled(not running)
         self._apply_train_availability()

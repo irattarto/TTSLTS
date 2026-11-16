@@ -57,6 +57,7 @@ class Settings:
     train_save_every: int = 25
     f5_train_epochs: int = 40  # an own F5 voice: rounds over the chosen sentences
     f5_save_every: int = 1000  # ... and a voice to listen to every this many training steps
+    train_source: str = "files"  # a voice changer voice from: "files" or "f5" (chosen sentences)
     train_kind: str = "rvc"  # what the Train tab makes: "rvc" (voice changer) or "f5" (speech)
 
     # Runtime

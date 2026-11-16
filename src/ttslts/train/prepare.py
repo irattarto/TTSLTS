@@ -135,6 +135,51 @@ def prepare_audio(
     return count
 
 
+SPAN_EDGE_S = 0.03  # a little in hand around a chosen sentence
+SPAN_FADE_S = 0.01
+
+
+def prepare_spans(
+    spans: list[dict],
+    sample_rate: int,
+    work: Path,
+    progress: Callable[[float], None] | None = None,
+) -> int:
+    """As ``prepare_audio``, from chosen stretches of the recordings (``file``, ``start``,
+    ``end`` in seconds, e.g. the sentences chosen for an own F5 voice): each recording is read
+    once, each stretch cut out with soft edges, long ones cut into clips."""
+    out = work / "wavs"
+    out.mkdir(parents=True, exist_ok=True)
+    for old in out.glob("*.npy"):
+        old.unlink()
+    by_file: dict[str, list[tuple[float, float]]] = {}
+    for span in spans:
+        by_file.setdefault(span["file"], []).append((float(span["start"]), float(span["end"])))
+    count = 0
+    fade = int(SPAN_FADE_S * sample_rate)
+    for k, (name, stretches) in enumerate(by_file.items()):
+        audio, sr = load_audio(name)
+        if sr != sample_rate:
+            audio = resample(audio, sr, sample_rate)
+        audio = highpass(audio, sample_rate)
+        for start, end in sorted(stretches):
+            a = max(0, int((start - SPAN_EDGE_S) * sample_rate))
+            piece = audio[a : int((end + SPAN_EDGE_S) * sample_rate)].copy()
+            if len(piece) > 4 * fade:
+                piece[:fade] *= np.linspace(0, 1, fade, dtype=np.float32)
+                piece[len(piece) - fade :] *= np.linspace(1, 0, fade, dtype=np.float32)
+            for clip in clips(piece, sample_rate):
+                clip = normalise(clip)
+                if clip is not None:
+                    np.save(out / f"{count}.npy", clip)
+                    count += 1
+        if progress:
+            progress((k + 1) / len(by_file))
+    if count == 0:
+        raise AudioError("None of the chosen sentences could be used.")
+    return count
+
+
 def extract_features(
     work: Path,
     sample_rate: int,

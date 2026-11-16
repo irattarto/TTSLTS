@@ -266,3 +266,29 @@ def pick_reference(clips: list[dict], kept: set[str]) -> dict:
         return (fits, sure, c.get("sim", 0.0) - 0.01 * (wob if wob is not None else 50.0))
 
     return max(pool, key=score)
+
+
+def kept_spans(work) -> list[dict]:
+    """The kept sentences as stretches of the recordings they were cut from (``file``, ``start``,
+    ``end`` in seconds): a voice changer (RVC) voice is trained on the same sentences, cut again
+    from the recordings at its own sample rate."""
+    import json
+    from pathlib import Path
+
+    work = Path(work)
+    selection = load_selection(work)
+    if not selection or not selection["kept"]:
+        raise ValueError("No sentences are chosen for this voice yet.")
+    files = json.loads((work / "prepare.json").read_text(encoding="utf-8"))["files"]
+    kept = {c["name"] for c in selection["kept"]}
+    spans = []
+    for n, src in enumerate(files):
+        found = work / "files" / f"{n:03d}.json"
+        if not found.exists():
+            continue
+        for c in json.loads(found.read_text(encoding="utf-8")):
+            if c["name"] in kept:
+                spans.append({"file": src, "start": c["start"], "end": c["end"]})
+    if not spans:
+        raise ValueError("The chosen sentences were not found in the recordings.")
+    return spans

@@ -89,3 +89,55 @@ def test_f5_training_waits_for_the_chosen_sentences(tmp_path, monkeypatch):
     c.start_f5_train("hang", 40, 1000)
     assert errors and "check the sentences" in errors[0]
     assert not c.f5_training
+
+
+def _prepared_set(work, src):
+    """An F5 set as the preparing step leaves it: one recording, three sentences, two kept."""
+    (work / "files").mkdir(parents=True)
+    (work / "prepare.json").write_text(json.dumps({"files": [str(src)]}), encoding="utf-8")
+    found = [
+        {"name": "000_00000", "file": 0, "text": "egy", "start": 0.5, "end": 1.5, "dur": 1.0},
+        {"name": "000_00001", "file": 0, "text": "kettő", "start": 2.0, "end": 7.0, "dur": 5.0},
+        {"name": "000_00002", "file": 0, "text": "három", "start": 7.5, "end": 8.5, "dur": 1.0},
+    ]
+    (work / "files" / "000.json").write_text(json.dumps(found), encoding="utf-8")
+    for c in found:
+        c["keep"] = c["name"] != "000_00002"
+    f5_data.save_selection(work, "normal", found, {"kept": 2, "kept_minutes": 0.1})
+
+
+def test_a_voice_changer_voice_is_cut_from_the_chosen_sentences(tmp_path):
+    import numpy as np
+    import soundfile as sf
+
+    from ttslts.train import prepare
+
+    src = tmp_path / "chapter.wav"
+    sr = 22050
+    t = np.arange(9 * sr) / sr
+    sf.write(str(src), (0.3 * np.sin(2 * np.pi * 150 * t)).astype(np.float32), sr)
+    work = tmp_path / "f5"
+    _prepared_set(work, src)
+    spans = f5_data.kept_spans(work)
+    assert spans == [
+        {"file": str(src), "start": 0.5, "end": 1.5},
+        {"file": str(src), "start": 2.0, "end": 7.0},
+    ]  # the left-out third sentence is not there
+    out = tmp_path / "rvc"
+    count = prepare.prepare_spans(spans, 40000, out)
+    lengths = sorted(len(np.load(out / "wavs" / f"{n}.npy")) / 40000 for n in range(count))
+    assert count == 3  # 1.06 s, and the 5 s sentence cut into two clips
+    assert lengths[0] == pytest.approx(1.06, abs=0.01) and max(lengths) <= prepare.CLIP_S + 0.01
+
+
+def test_no_chosen_sentences_no_voice_changer_training(tmp_path, monkeypatch):
+    from ttslts import paths
+
+    monkeypatch.setattr(paths, "train_dir", lambda: tmp_path / "train")
+    monkeypatch.setattr(Controller, "training_runtime_ready", staticmethod(lambda: True))
+    c = Controller(Settings(), save=lambda _s: None)
+    errors = []
+    c.error.connect(errors.append)
+    c.start_training([], "hang", resume=False, from_f5=True)
+    assert errors and "Choose the sentences first" in errors[0]
+    assert not c.training

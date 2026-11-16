@@ -321,9 +321,12 @@ class Controller(QObject):
     def training(self) -> bool:
         return self._train_proc is not None and self._train_proc.poll() is None
 
-    def start_training(self, files: list[str], name: str, resume: bool) -> None:
-        """Train a voice from the recordings in ``files`` (see ``Settings.train_*``)."""
-        from ttslts.train import hparams, pretrained, runtime
+    def start_training(
+        self, files: list[str], name: str, resume: bool, from_f5: bool = False
+    ) -> None:
+        """Train a voice from the recordings in ``files`` (see ``Settings.train_*``);
+        ``from_f5``: from the sentences chosen for the own F5 voice of the same name instead."""
+        from ttslts.train import f5_data, hparams, pretrained, runtime
 
         s = self.settings
         if self.training or self.f5_training or self.f5_preparing:
@@ -331,7 +334,17 @@ class Controller(QObject):
         if not self.training_runtime_ready():
             self.error.emit("The training environment is not set up yet.")
             return
-        if not files and not resume:
+        spans: list[dict] = []
+        if from_f5 and not resume:
+            try:
+                spans = f5_data.kept_spans(self.f5_prep_dir(name))
+            except (OSError, ValueError, KeyError) as exc:
+                self.error.emit(
+                    f"{exc}\n\nChoose the sentences first: Make a text-to-speech voice (F5), "
+                    "steps 1 and 2, with the same voice name."
+                )
+                return
+        elif not files and not resume:
             self.error.emit("Add at least one recording (mp3 or wav) to train on.")
             return
         if not s.contentvec_path or not Path(s.contentvec_path).exists():
@@ -351,6 +364,7 @@ class Controller(QObject):
         job = {
             "name": name,
             "files": files,
+            "spans": spans,
             "sample_rate": s.train_sample_rate,
             "epochs": s.train_epochs,
             "batch_size": s.train_batch_size,
