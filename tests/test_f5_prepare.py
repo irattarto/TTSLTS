@@ -56,6 +56,7 @@ def test_recordings_are_cut_into_sentences_and_rechecked(tmp_path, monkeypatch):
     assert 0.45 <= first["start"] <= 0.5 and first["end"] >= 1.5  # cut at the pauses
     assert (tmp_path / "work" / "wavs" / f"{first['name']}.wav").exists()
     assert measured[0]["agree"] == 1.0 and measured[1]["agree"] < 0.7  # recheck heard "Első"
+    assert (tmp_path / "work" / f5_prepare.MEASURED_DONE).exists()  # all measured
     calls = FakeWhisper.calls
     f5_prepare.run_job(job)  # again: nothing is written down twice
     assert FakeWhisper.calls == calls
@@ -74,9 +75,28 @@ def test_a_stop_file_stops_the_job(tmp_path, monkeypatch):
     )
     assert f5_prepare.main([str(_job_file(tmp_path, job))]) == 0
     assert not (work / "files" / "000.json").exists()
+    assert not (work / f5_prepare.MEASURED_DONE).exists()
 
 
 def _job_file(tmp_path, job):
     p = tmp_path / "job.json"
     p.write_text(json.dumps(job), encoding="utf-8")
     return p
+
+
+def test_whisper_keeps_to_the_cpu_without_cuda(tmp_path, monkeypatch):
+    import sys
+    import types
+
+    made = []
+    fake = types.SimpleNamespace(
+        WhisperModel=lambda folder, device, compute_type: made.append(device) or device,
+        download_model=lambda name, output_dir: None,
+    )
+    monkeypatch.setitem(sys.modules, "faster_whisper", fake)
+    monkeypatch.setattr(f5_prepare, "_has_cuda", lambda: False)
+    (tmp_path / "large-v3").mkdir()
+    (tmp_path / "large-v3" / "model.bin").write_bytes(b"x")
+    assert (
+        f5_prepare._whisper("large-v3", {"whisper_dir": str(tmp_path), "device": "cuda"}) == "cpu"
+    )

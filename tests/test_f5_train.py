@@ -141,3 +141,54 @@ def test_no_chosen_sentences_no_voice_changer_training(tmp_path, monkeypatch):
     c.start_training([], "hang", resume=False, from_f5=True)
     assert errors and "Choose the sentences first" in errors[0]
     assert not c.training
+
+
+def test_other_recordings_forget_the_old_choice_but_keep_saved_voices(tmp_path, monkeypatch):
+    from ttslts import paths
+
+    monkeypatch.setattr(paths, "train_dir", lambda: tmp_path / "train")
+    work = Controller.f5_prep_dir("hang")
+    for sub in ("files", "wavs", "train/dataset", "train/ckpts", "train/voices/u001000"):
+        (work / sub).mkdir(parents=True)
+    for name in (
+        "measured.json",
+        "measured.done",
+        "selection.json",
+        "train/ckpts/model_last.pt",
+        "train/ckpts/pretrained_base.pt",
+        "train/voices/u001000/model.safetensors",
+    ):
+        (work / name).write_text("x", encoding="utf-8")  # fmt: skip
+    (work / "prepare.json").write_text(json.dumps({"files": ["a.mp3"]}), encoding="utf-8")
+    c = Controller(Settings(), save=lambda _s: None)
+    monkeypatch.setattr(Controller, "f5_training_ready", staticmethod(lambda: True))
+    monkeypatch.setattr(c, "_start_job", lambda *a, **k: True)
+    c.start_f5_prep(["b.mp3"], "hang")
+    for name in (
+        "files",
+        "wavs",
+        "train/dataset",
+        "measured.json",
+        "measured.done",
+        "selection.json",
+        "train/ckpts/model_last.pt",
+        "train/voices",
+    ):
+        assert not (work / name).exists(), name  # fmt: skip
+    assert (work / "train" / "ckpts" / "pretrained_base.pt").exists()  # the base: still of use
+    kept = list((work / "train").glob("voices-before-*/u001000/model.safetensors"))
+    assert kept  # a voice already trained is not lost
+
+
+def test_installing_lets_go_of_the_loaded_voice_first(tmp_path, monkeypatch):
+    from ttslts.tts import f5_voices
+
+    c = Controller(Settings(), save=lambda _s: None)
+    order = []
+    monkeypatch.setattr(c, "_close_f5", lambda: order.append("close"))
+    monkeypatch.setattr(
+        f5_voices, "add_voice", lambda model, base=None, name=None: order.append("add") or "f5:x"
+    )
+    monkeypatch.setattr(c, "_background", lambda fn, name, once=False: fn())
+    c.install_f5_candidate(tmp_path, "x")
+    assert order == ["close", "add"]

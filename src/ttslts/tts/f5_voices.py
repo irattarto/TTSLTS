@@ -111,6 +111,11 @@ def display_name(voice_id: str) -> str:
     return f"{voice_id[len(PREFIX) :]} (own F5 voice)"
 
 
+def safe_name(name: str) -> str:
+    """A voice name as its folder is called."""
+    return re.sub(r"[^\w.-]+", "-", name).strip("-.") or "voice"
+
+
 def add_voice(model: str | Path, base: Path | None = None, name: str | None = None) -> str:
     """Copy an F5 voice into the voices folder; returns its id.
 
@@ -131,7 +136,7 @@ def add_voice(model: str | Path, base: Path | None = None, name: str | None = No
     if not (folder / "reference.txt").read_text(encoding="utf-8").strip():
         raise NotAnF5Voice("reference.txt is empty: it must hold the voice sample's exact text")
     name = name or re.sub(r"[-_ ]?f5$", "", folder.name, flags=re.IGNORECASE)
-    name = re.sub(r"[^\w.-]+", "-", name).strip("-.") or "voice"
+    name = safe_name(name)
     target = voices_dir(base) / name
     tmp = target.with_name(name + ".part")
     shutil.rmtree(tmp, ignore_errors=True)

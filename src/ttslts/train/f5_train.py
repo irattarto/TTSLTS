@@ -103,7 +103,7 @@ def make_dataset(work: Path, out: Path, vocab_path: Path) -> list[float]:
     selection = f5_data.load_selection(work)
     if not selection or not selection["kept"]:
         raise ValueError("Choose the sentences first (2. Check the sentences).")
-    stamp = json.dumps([c["name"] for c in selection["kept"]])
+    stamp = json.dumps([[c["name"], c["text"]] for c in selection["kept"]], ensure_ascii=False)
     if (out / "selection.json").exists() and (out / "selection.json").read_text("utf-8") == stamp:
         return json.loads((out / "duration.json").read_text("utf-8"))["duration"]
     import soundfile as sf

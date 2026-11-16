@@ -366,13 +366,18 @@ class MainWindow(QMainWindow):
         file_buttons.addStretch(1)
         layout.addLayout(file_buttons)
 
-        form = QFormLayout()
+        name_form = QFormLayout()
         self.train_name_edit = QLineEdit(s.train_name)
-        self.train_name_edit.setToolTip("The voice is saved as <name>.pth and <name>.onnx")
-        self.train_name_edit.editingFinished.connect(
-            lambda: self._set("train_name", self._train_name())
+        self.train_name_edit.setToolTip(
+            "The voice's name: a voice changer voice is saved as <name>.pth and <name>.onnx, a "
+            "text-to-speech voice is installed under it. An F5 voice's prepared recordings, "
+            "chosen sentences and training are kept under this name too."
         )
-        form.addRow("Voice name", self.train_name_edit)
+        self.train_name_edit.editingFinished.connect(self._train_name_changed)
+        name_form.addRow("Voice name", self.train_name_edit)
+        layout.addLayout(name_form)
+
+        form = QFormLayout()
         self.train_source_combo = QComboBox()
         self.train_source_combo.addItem("the recordings listed above", "files")
         self.train_source_combo.addItem("the sentences chosen for the F5 voice", "f5")
@@ -584,14 +589,20 @@ class MainWindow(QMainWindow):
         self.train_setup_hint.setVisible(kind == "rvc" and not ready)
         self._f5_update_choice()
 
+    def _train_name_changed(self) -> None:
+        self._set("train_name", self._train_name())
+        self._f5_update_choice()
+        self._f5_refresh_candidates()
+
     def _f5_work(self) -> Path:
         return self.controller.f5_prep_dir(self._train_name())
 
     def _f5_update_choice(self) -> None:
         from ttslts.train import f5_data
+        from ttslts.train.f5_prepare import MEASURED_DONE
 
         work = self._f5_work()
-        measured = (work / "measured.json").exists()
+        measured = (work / MEASURED_DONE).exists() and (work / "measured.json").exists()
         busy = self.controller.f5_preparing or self.controller.f5_training
         self.f5_check_btn.setEnabled(measured and not busy)
         saved = f5_data.load_selection(work)
@@ -604,6 +615,10 @@ class MainWindow(QMainWindow):
             )
         elif measured:
             self.f5_choice_label.setText("Prepared: check the sentences next.")
+        elif (work / "measured.json").exists():
+            self.f5_choice_label.setText(
+                "Preparing stopped halfway: 1. Prepare the recordings goes on where it stopped."
+            )
         else:
             self.f5_choice_label.setText("")
 
@@ -639,11 +654,11 @@ class MainWindow(QMainWindow):
         self.train_log.clear()
         self.controller.start_f5_prep(files, name)
 
-    def _on_f5_tools_installed(self) -> None:
+    def _on_f5_tools_installed(self, ok: bool = True) -> None:
         self.train_bar.setRange(0, 1000)
         self.f5_prep_btn.setEnabled(True)
-        if self._pending_f5_prep:
-            self._pending_f5_prep = False
+        pending, self._pending_f5_prep = self._pending_f5_prep, False
+        if pending and ok:
             self._f5_prep_start()
 
     def _on_f5_prep_running(self, running: bool) -> None:
@@ -764,7 +779,7 @@ class MainWindow(QMainWindow):
         folder = self.f5_cand_combo.currentData()
         if not folder:
             return
-        name = self._train_name()
+        name = f5_voices.safe_name(self._train_name())
         if f5_voices.PREFIX + name in f5_voices.installed_voices():
             answer = QMessageBox.question(
                 self,
@@ -782,10 +797,11 @@ class MainWindow(QMainWindow):
         )
 
     def _f5_check(self) -> None:
+        from ttslts.train.f5_prepare import MEASURED_DONE
         from ttslts.ui.f5_review_dialog import F5ReviewDialog
 
         work = self._f5_work()
-        if not (work / "measured.json").exists():
+        if not (work / MEASURED_DONE).exists():
             return
         F5ReviewDialog(work, self.controller.play_clip, self).exec()
         self._f5_update_choice()

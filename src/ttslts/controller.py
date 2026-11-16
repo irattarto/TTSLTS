@@ -46,7 +46,7 @@ class Controller(QObject):
     trainProgress = Signal(dict)
     trainSaved = Signal(str, int)
     trainFinished = Signal(str, str, bool)  # .pth, .onnx, finished (False: stopped early)
-    f5ToolsInstalled = Signal()
+    f5ToolsInstalled = Signal(bool)  # set up (False: it failed)
     f5PrepRunning = Signal(bool)
     f5PrepStage = Signal(str)
     f5PrepProgress = Signal(float)
@@ -68,7 +68,8 @@ class Controller(QObject):
         self._f5 = None  # an F5-TTS voice: a process of its own (see tts.f5_engine)
         self._f5_key = None
         self._vc = None
-        self._train_proc: subprocess.Popen | None = None
+        # the training jobs, each a process of its own: kind -> (process, folder of its STOP file)
+        self._jobs: dict[str, tuple[subprocess.Popen, Path]] = {}
         self._gpu_memory = GpuMemoryGate()
         # One text to speech at a time; Stop also cancels speech that is still being made.
         self._tts_lock = threading.Lock()
@@ -81,7 +82,6 @@ class Controller(QObject):
         self._vc_cancel = False
         self._busy_jobs: set[str] = set()  # downloads and set-ups that are running
         onnx_util.set_fallback_notifier(self.status.emit)
-        self._train_work: Path | None = None
 
     # -- settings --------------------------------------------------------
     def save_settings(self) -> None:
@@ -102,7 +102,7 @@ class Controller(QObject):
         speech and voice models stay on the CPU; they move back to the GPU afterwards. The same
         goes while something else (a game) has filled the card's memory.
         """
-        return self.settings.use_gpu and not self.training and self._gpu_memory.allowed()
+        return self.settings.use_gpu and not self.gpu_job_running and self._gpu_memory.allowed()
 
     def piper(self):
         s = self.settings
@@ -317,9 +317,110 @@ class Controller(QObject):
 
         self._background(work, "install-f5-runtime", once=True)
 
+    # -- training jobs ----------------------------------------------------
+    # Each runs in a process of its own and reports one JSON object a line on stdout (see
+    # ``train.run``). One at a time: each needs (nearly all of) the graphics card. Kinds: "rvc"
+    # (a voice changer voice), "f5-prep" (measuring recordings for an own F5 voice), "f5-train".
+    def _job_running(self, kind: str) -> bool:
+        proc = self._jobs.get(kind, (None, None))[0]
+        return proc is not None and proc.poll() is None
+
+    @property
+    def gpu_job_running(self) -> bool:
+        return any(self._job_running(kind) for kind in list(self._jobs))
+
     @property
     def training(self) -> bool:
-        return self._train_proc is not None and self._train_proc.poll() is None
+        return self._job_running("rvc")
+
+    def _start_job(
+        self,
+        kind: str,
+        command: list[str],
+        env: dict[str, str],
+        stop_dir: Path,
+        log_path: Path,
+        running: Signal,
+        on_event: Callable[[dict], None],
+        failed: str,
+        on_end: Callable[[], None] | None = None,
+        append_log: bool = False,
+    ) -> bool:
+        """Start a job process; ``on_event`` gets its events on a reader thread, ``on_end`` runs
+        after it ended, an end without "done" or "stopped" is reported as ``failed: why``."""
+        log_file = open(log_path, "a" if append_log else "w", encoding="utf-8")  # reader closes
+        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
+        try:
+            proc = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=log_file,
+                text=True,
+                encoding="utf-8",
+                creationflags=flags,
+                env={**os.environ, "PYTHONIOENCODING": "utf-8", **env},
+            )
+        except OSError as exc:
+            log_file.close()
+            self.error.emit(f"Could not start: {exc}")
+            return False
+        self._jobs[kind] = (proc, stop_dir)
+        self._release_gpu_models()
+        running.emit(True)
+        threading.Thread(
+            target=self._read_job,
+            args=(kind, proc, log_file, log_path, running, on_event, failed, on_end),
+            daemon=True,
+            name=kind,
+        ).start()
+        return True
+
+    def _read_job(self, kind, proc, log_file, log_path, running, on_event, failed, on_end) -> None:
+        ended, last_error = False, ""
+        try:
+            for line in proc.stdout:
+                try:
+                    event = json.loads(line)
+                except ValueError:
+                    continue
+                if not isinstance(event, dict):
+                    continue
+                if event.get("type") in ("done", "stopped"):
+                    ended = True
+                elif event.get("type") == "error":
+                    last_error = event.get("message", "")
+                on_event(event)
+            proc.wait()
+        finally:
+            log_file.close()
+            if self._jobs.get(kind, (None, None))[0] is proc:
+                del self._jobs[kind]
+            running.emit(False)
+        if on_end is not None:
+            on_end()
+        if not ended:
+            why = last_error or "the process ended unexpectedly"
+            self.error.emit(f"{failed}: {why}\n\nDetails: {log_path}")
+
+    def _stop_job(self, kind: str, stage: Signal, wait_s: float) -> None:
+        """Ask a job to stop (it saves first); ends the process if it has not after ``wait_s``."""
+        proc, stop_dir = self._jobs.get(kind, (None, None))
+        if proc is None or proc.poll() is not None:
+            return
+        try:
+            (stop_dir / "STOP").write_text("stop", encoding="utf-8")
+        except OSError:
+            proc.terminate()
+            return
+        stage.emit("Stopping after saving…")
+
+        def force():
+            try:
+                proc.wait(timeout=wait_s)
+            except subprocess.TimeoutExpired:
+                proc.terminate()
+
+        threading.Thread(target=force, daemon=True, name=f"{kind}-stop").start()
 
     def start_training(
         self, files: list[str], name: str, resume: bool, from_f5: bool = False
@@ -329,7 +430,7 @@ class Controller(QObject):
         from ttslts.train import f5_data, hparams, pretrained, runtime
 
         s = self.settings
-        if self.training or self.f5_training or self.f5_preparing:
+        if self.gpu_job_running:
             return
         if not self.training_runtime_ready():
             self.error.emit("The training environment is not set up yet.")
@@ -382,28 +483,16 @@ class Controller(QObject):
         work.mkdir(parents=True, exist_ok=True)
         job_file = work / "job.json"
         job_file.write_text(json.dumps(job, indent=2), encoding="utf-8")
-        log_file = open(work / "train.log", "w", encoding="utf-8")  # closed by the reader thread
-        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-        try:
-            proc = subprocess.Popen(
-                [*runtime.python_command(), "-u", "-m", "ttslts.train.run", str(job_file)],
-                stdout=subprocess.PIPE,
-                stderr=log_file,
-                text=True,
-                encoding="utf-8",
-                creationflags=flags,
-                env={**os.environ, "PYTHONIOENCODING": "utf-8", **runtime.prepare_for_run()},
-            )
-        except OSError as exc:
-            log_file.close()
-            self.error.emit(f"Could not start training: {exc}")
-            return
-        self._train_proc, self._train_work = proc, work
-        self._release_gpu_models()
-        self.trainRunning.emit(True)
-        threading.Thread(
-            target=self._read_training, args=(proc, log_file, work), daemon=True, name="train"
-        ).start()
+        self._start_job(
+            "rvc",
+            [*runtime.python_command(), "-u", "-m", "ttslts.train.run", str(job_file)],
+            runtime.prepare_for_run(),
+            work,
+            work / "train.log",
+            self.trainRunning,
+            self._on_training_event,
+            "Training stopped",
+        )
 
     def retry_gpu(self) -> None:
         """Forget which models failed on the GPU and reload everything, so all try it again."""
@@ -445,59 +534,20 @@ class Controller(QObject):
             self.status.emit("Voice changer stopped: the graphics card is needed for training")
         self._release_tts_models()
 
-    def _read_training(self, proc: subprocess.Popen, log_file, work: Path) -> None:
-        last_error = ""
-        ended = False
-        try:
-            for line in proc.stdout:
-                try:
-                    event = json.loads(line)
-                except ValueError:
-                    continue
-                kind = event.get("type")
-                if kind == "stage":
-                    self.trainStage.emit(event.get("text", ""))
-                elif kind == "progress":
-                    self.trainProgress.emit(event)
-                elif kind == "saved":
-                    self.trainSaved.emit(event["pth"], int(event["epoch"]))
-                elif kind in ("done", "stopped"):
-                    ended = True
-                    self.trainFinished.emit(
-                        event.get("pth", ""), event.get("onnx", ""), kind == "done"
-                    )
-                elif kind == "error":
-                    last_error = event.get("message", "")
-            proc.wait()
-        finally:
-            log_file.close()
-            self._train_proc = None
-            self.trainRunning.emit(False)
-        if not ended:
-            self.error.emit(
-                f"Training stopped: {last_error or 'the training process ended unexpectedly'}"
-                f"\n\nDetails: {work / 'train.log'}"
-            )
+    def _on_training_event(self, event: dict) -> None:
+        kind = event.get("type")
+        if kind == "stage":
+            self.trainStage.emit(event.get("text", ""))
+        elif kind == "progress":
+            self.trainProgress.emit(event)
+        elif kind == "saved":
+            self.trainSaved.emit(event["pth"], int(event["epoch"]))
+        elif kind in ("done", "stopped"):
+            self.trainFinished.emit(event.get("pth", ""), event.get("onnx", ""), kind == "done")
 
     def stop_training(self) -> None:
         """Ask training to stop after saving; ends the process if it does not respond."""
-        proc, work = self._train_proc, self._train_work
-        if proc is None or work is None or proc.poll() is not None:
-            return
-        try:
-            (work / "STOP").write_text("stop", encoding="utf-8")
-        except OSError:
-            proc.terminate()
-            return
-        self.trainStage.emit("Stopping after saving…")
-
-        def force():
-            try:
-                proc.wait(timeout=90)
-            except subprocess.TimeoutExpired:
-                proc.terminate()
-
-        threading.Thread(target=force, daemon=True, name="train-stop").start()
+        self._stop_job("rvc", self.trainStage, 90)
 
     # -- own F5 voices: choosing the training clips ------------------------
     @staticmethod
@@ -512,8 +562,12 @@ class Controller(QObject):
         from ttslts.tts import f5_runtime
 
         def work():
-            f5_runtime.install_training_tools(self.status.emit)
-            self.f5ToolsInstalled.emit()
+            try:
+                f5_runtime.install_training_tools(self.status.emit)
+            except Exception:
+                self.f5ToolsInstalled.emit(False)
+                raise
+            self.f5ToolsInstalled.emit(True)
             self.status.emit("Tools for training F5 voices ready")
 
         self._background(work, "install-f5-train-tools", once=True)
@@ -524,15 +578,14 @@ class Controller(QObject):
 
     @property
     def f5_preparing(self) -> bool:
-        proc = getattr(self, "_f5_prep_proc", None)
-        return proc is not None and proc.poll() is None
+        return self._job_running("f5-prep")
 
     def start_f5_prep(self, files: list[str], name: str) -> None:
         """Write down and measure ``files`` for an own F5 voice called ``name`` (resumes a
         stopped run of the same name; the recordings must stay the same)."""
         from ttslts.tts import f5_runtime
 
-        if self.f5_preparing or self.training or self.f5_training:
+        if self.gpu_job_running:
             return
         if not self.f5_training_ready():
             self.error.emit("The tools for training F5 voices are not set up yet.")
@@ -545,12 +598,8 @@ class Controller(QObject):
         job_file = work / "prepare.json"
         if job_file.exists():
             old = json.loads(job_file.read_text(encoding="utf-8")).get("files")
-            if old != files:  # other recordings: the transcripts so far are of no use
-                import shutil
-
-                for sub in ("files", "wavs"):
-                    shutil.rmtree(work / sub, ignore_errors=True)
-                (work / "measured.json").unlink(missing_ok=True)
+            if old != files:
+                self._forget_f5_recordings(work)
         models = paths.models_dir()
         job = {
             "files": files,
@@ -561,72 +610,50 @@ class Controller(QObject):
             "device": "cuda" if self.settings.use_gpu else "cpu",
         }
         job_file.write_text(json.dumps(job, indent=2), encoding="utf-8")
-        log_file = open(work / "prepare.log", "w", encoding="utf-8")  # closed by the reader
-        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-        try:
-            command = [*f5_runtime.python_command(), "-u", "-m", "ttslts.train.f5_prepare"]
-            proc = subprocess.Popen(
-                [*command, str(job_file)],
-                stdout=subprocess.PIPE,
-                stderr=log_file,
-                text=True,
-                encoding="utf-8",
-                creationflags=flags,
-                env={
-                    **os.environ,
-                    "PYTHONIOENCODING": "utf-8",
-                    "HF_HOME": str(models / "hf"),  # the speaker model: in the app's folder
-                    **f5_runtime.prepare_for_run(),
-                },
-            )
-        except OSError as exc:
-            log_file.close()
-            self.error.emit(f"Could not start: {exc}")
-            return
-        self._f5_prep_proc, self._f5_prep_work = proc, work
-        self._release_gpu_models()
-        self.f5PrepRunning.emit(True)
-        threading.Thread(
-            target=self._read_f5_prep, args=(proc, log_file, work), daemon=True, name="f5-prep"
-        ).start()
+        done = {"measured": ""}
 
-    def _read_f5_prep(self, proc: subprocess.Popen, log_file, work: Path) -> None:
-        measured, ended, last_error = "", False, ""
-        try:
-            for line in proc.stdout:
-                try:
-                    event = json.loads(line)
-                except ValueError:
-                    continue
-                kind = event.get("type")
-                if kind == "stage":
-                    self.f5PrepStage.emit(event.get("text", ""))
-                elif kind == "progress":
-                    self.f5PrepProgress.emit(float(event.get("fraction", 0.0)))
-                elif kind == "done":
-                    measured, ended = event.get("measured", ""), True
-                elif kind == "stopped":
-                    ended = True
-                elif kind == "error":
-                    last_error = event.get("message", "")
-            proc.wait()
-        finally:
-            log_file.close()
-            self._f5_prep_proc = None
-            self.f5PrepRunning.emit(False)
-        self.f5PrepFinished.emit(measured, bool(measured))
-        if not ended:
-            why = last_error or "the process ended unexpectedly"
-            self.error.emit(
-                f"Preparing the recordings stopped: {why}\n\nDetails: {work / 'prepare.log'}"
-            )
+        def on_event(event: dict) -> None:
+            kind = event.get("type")
+            if kind == "stage":
+                self.f5PrepStage.emit(event.get("text", ""))
+            elif kind == "progress":
+                self.f5PrepProgress.emit(float(event.get("fraction", 0.0)))
+            elif kind == "done":
+                done["measured"] = event.get("measured", "")
+
+        self._start_job(
+            "f5-prep",
+            [*f5_runtime.python_command(), "-u", "-m", "ttslts.train.f5_prepare", str(job_file)],
+            {"HF_HOME": str(models / "hf"), **f5_runtime.prepare_for_run()},  # the speaker model
+            work,
+            work / "prepare.log",
+            self.f5PrepRunning,
+            on_event,
+            "Preparing the recordings stopped",
+            on_end=lambda: self.f5PrepFinished.emit(done["measured"], bool(done["measured"])),
+        )
+
+    @staticmethod
+    def _forget_f5_recordings(work: Path) -> None:
+        """Other recordings for the same voice name: what was written down, measured and chosen
+        from the old ones is of no use, nor is a training of it halfway. Voices it already saved
+        are kept, moved aside (``train/voices-before-<time>``)."""
+        import shutil
+
+        from ttslts.train import f5_data, f5_prepare
+
+        for sub in ("files", "wavs", "train/dataset"):
+            shutil.rmtree(work / sub, ignore_errors=True)
+        for name in ("measured.json", f5_prepare.MEASURED_DONE, f5_data.SELECTION,
+                     "train/ckpts/model_last.pt"):  # fmt: skip
+            (work / name).unlink(missing_ok=True)
+        voices = work / "train" / "voices"
+        if voices.is_dir():
+            voices.rename(voices.with_name(time.strftime("voices-before-%Y%m%d-%H%M%S")))
 
     def stop_f5_prep(self) -> None:
         """Ask the measuring to stop; what is written down so far is kept for the next start."""
-        work = getattr(self, "_f5_prep_work", None)
-        if self.f5_preparing and work is not None:
-            (work / "STOP").write_text("stop", encoding="utf-8")
-            self.f5PrepStage.emit("Stopping…")
+        self._stop_job("f5-prep", self.f5PrepStage, 120)
 
     def play_clip(self, path: str | Path) -> None:
         """Play a training clip on the speech output (the selection check)."""
@@ -641,15 +668,14 @@ class Controller(QObject):
     # -- own F5 voices: training ------------------------------------------
     @property
     def f5_training(self) -> bool:
-        proc = getattr(self, "_f5_train_proc", None)
-        return proc is not None and proc.poll() is None
+        return self._job_running("f5-train")
 
     def start_f5_train(self, name: str, epochs: int, save_every: int) -> None:
         """Train the own F5 voice ``name`` on its chosen sentences (goes on where a stopped run
         of it stopped)."""
         from ttslts.tts import f5_runtime
 
-        if self.f5_training or self.f5_preparing or self.training:
+        if self.gpu_job_running:
             return
         work = self.f5_prep_dir(name)
         if not (work / "selection.json").exists():
@@ -665,75 +691,40 @@ class Controller(QObject):
         }
         job_file = train / "train.json"
         job_file.write_text(json.dumps(job, indent=2), encoding="utf-8")
-        log_file = open(train / "train.log", "a", encoding="utf-8")  # closed by the reader
-        flags = subprocess.CREATE_NO_WINDOW if sys.platform == "win32" else 0
-        try:
-            proc = subprocess.Popen(
-                [*f5_runtime.python_command(), "-u", "-m", "ttslts.train.f5_train", str(job_file)],
-                stdout=subprocess.PIPE,
-                stderr=log_file,
-                text=True,
-                encoding="utf-8",
-                creationflags=flags,
-                env={
-                    **os.environ,
-                    "PYTHONIOENCODING": "utf-8",
-                    "HF_HOME": str(paths.models_dir() / "hf"),
-                    "ACCELERATE_MIXED_PRECISION": "bf16",
-                    **f5_runtime.prepare_for_run(),
-                },
-            )
-        except OSError as exc:
-            log_file.close()
-            self.error.emit(f"Could not start: {exc}")
-            return
-        self._f5_train_proc, self._f5_train_work = proc, train
-        self._release_gpu_models()
-        self.f5TrainRunning.emit(True)
-        threading.Thread(
-            target=self._read_f5_train, args=(proc, log_file, train), daemon=True, name="f5-train"
-        ).start()
+        done = {"done": False}
 
-    def _read_f5_train(self, proc: subprocess.Popen, log_file, train: Path) -> None:
-        done, ended, last_error = False, False, ""
-        try:
-            for line in proc.stdout:
-                try:
-                    event = json.loads(line)
-                except ValueError:
-                    continue
-                kind = event.get("type")
-                if kind == "stage":
-                    self.f5TrainStage.emit(event.get("text", ""))
-                elif kind == "progress":
-                    self.f5TrainProgress.emit(event)
-                elif kind == "saved":
-                    self.f5TrainSaved.emit(event.get("folder", ""), int(event.get("update", 0)))
-                elif kind == "done":
-                    done = ended = True
-                elif kind == "stopped":
-                    ended = True
-                elif kind == "error":
-                    last_error = event.get("message", "")
-            proc.wait()
-        finally:
-            log_file.close()
-            self._f5_train_proc = None
-            self.f5TrainRunning.emit(False)
-        self.f5TrainFinished.emit(done)
-        if not ended:
-            why = last_error or "the process ended unexpectedly"
-            self.error.emit(
-                f"Training the F5 voice stopped: {why}\n\nDetails: {train / 'train.log'}"
-            )
+        def on_event(event: dict) -> None:
+            kind = event.get("type")
+            if kind == "stage":
+                self.f5TrainStage.emit(event.get("text", ""))
+            elif kind == "progress":
+                self.f5TrainProgress.emit(event)
+            elif kind == "saved":
+                self.f5TrainSaved.emit(event.get("folder", ""), int(event.get("update", 0)))
+            elif kind == "done":
+                done["done"] = True
+
+        self._start_job(
+            "f5-train",
+            [*f5_runtime.python_command(), "-u", "-m", "ttslts.train.f5_train", str(job_file)],
+            {
+                "HF_HOME": str(paths.models_dir() / "hf"),
+                "ACCELERATE_MIXED_PRECISION": "bf16",
+                **f5_runtime.prepare_for_run(),
+            },
+            train,
+            train / "train.log",
+            self.f5TrainRunning,
+            on_event,
+            "Training the F5 voice stopped",
+            on_end=lambda: self.f5TrainFinished.emit(done["done"]),
+            append_log=True,  # a stopped training goes on: keep what it wrote before
+        )
 
     def stop_f5_train(self) -> None:
         """Ask the F5 training to stop; it saves where it is first, the next start goes on from
         there."""
-        train = getattr(self, "_f5_train_work", None)
-        if self.f5_training and train is not None:
-            (train / "STOP").write_text("stop", encoding="utf-8")
-            self.f5TrainStage.emit("Stopping after saving…")
+        self._stop_job("f5-train", self.f5TrainStage, 300)
 
     @classmethod
     def f5_candidates(cls, name: str) -> list[Path]:
@@ -780,6 +771,8 @@ class Controller(QObject):
         from ttslts.tts import f5_voices
 
         def work():
+            with self._lock:  # the voice may be the one loaded: its files must be let go
+                self._close_f5()
             voice_id = f5_voices.add_voice(Path(folder) / "model.safetensors", name=name)
             self.f5CandidateInstalled.emit(voice_id)
             self.status.emit(f"Installed the F5 voice {name}")
@@ -1071,9 +1064,9 @@ class Controller(QObject):
             self.start_vc()
 
     def shutdown(self) -> None:
-        proc = self._train_proc
-        if proc is not None and proc.poll() is None:
-            proc.terminate()  # the last periodic checkpoint is kept for resuming
+        for proc, _stop_dir in list(self._jobs.values()):
+            if proc.poll() is None:
+                proc.terminate()  # each job's last periodic save is kept for going on
         self.stop_vc()
         self.stop_speaking()
         with self._lock:

@@ -313,6 +313,10 @@ def test_train_tab_makes_an_f5_voice_in_steps(make_window, monkeypatch):
     clips = [{"name": f"000_{n:05d}", "text": "mondat", "dur": 3.0, "sim": 0.9, "core": True,
               "f0": 110.0, "wobble": 50.0, "agree": 1.0} for n in range(10)]  # fmt: skip
     (work / "measured.json").write_text(json.dumps(clips), encoding="utf-8")
+    w.controller.f5PrepRunning.emit(False)  # stopped halfway: not to be checked yet
+    assert not w.f5_check_btn.isEnabled() and "halfway" in w.f5_choice_label.text()
+    w.controller.f5PrepRunning.emit(True)
+    (work / "measured.done").write_text("ok", encoding="utf-8")
     opened = []
     monkeypatch.setattr(w, "_f5_check", lambda: opened.append(True))
     w.controller.f5PrepRunning.emit(False)
@@ -372,3 +376,41 @@ def test_a_voice_changer_voice_can_learn_from_the_f5_sentences(make_window, monk
     assert jobs[-1][3] is True
     w.controller.trainRunning.emit(True)
     assert not w.train_source_combo.isEnabled() and not w.train_kind_combo.isEnabled()
+
+
+def test_f5_steps_use_the_voice_name_shown_in_both_kinds(make_window, monkeypatch):
+    w = make_window()
+    w.train_kind_combo.setCurrentIndex(w.train_kind_combo.findData("f5"))
+    assert not w.train_name_edit.isHidden()  # not inside the voice changer part
+    w.train_name_edit.setText("masik hang")
+    w.train_name_edit.editingFinished.emit()
+    assert w.settings.train_name == "masik hang"
+    assert w._f5_work().name == "masik hang"
+
+
+def test_a_failed_tools_setup_frees_the_prepare_button(make_window):
+    w = make_window()
+    w._pending_f5_prep = True
+    w.f5_prep_btn.setEnabled(False)
+    w.train_bar.setRange(0, 0)
+    w.controller.f5ToolsInstalled.emit(False)
+    assert w.f5_prep_btn.isEnabled() and w.train_bar.maximum() == 1000
+    assert not w._pending_f5_prep
+
+
+def test_installing_over_a_voice_with_spaces_in_its_name_asks_first(make_window, monkeypatch):
+    from PySide6.QtWidgets import QMessageBox
+
+    from ttslts.tts import f5_voices
+
+    w = make_window()
+    w.f5_cand_combo.addItem("after step 1000", "x")
+    w.train_name_edit.setText("my voice")
+    monkeypatch.setattr(f5_voices, "installed_voices", lambda base=None: ["f5:my-voice"])
+    asked, installed = [], []
+    monkeypatch.setattr(
+        QMessageBox, "question", lambda *a, **k: asked.append(a) or QMessageBox.StandardButton.No
+    )
+    monkeypatch.setattr(w.controller, "install_f5_candidate", lambda f, n: installed.append(n))
+    w._f5_install()
+    assert asked and not installed

@@ -82,10 +82,15 @@ def test_models_stay_off_the_gpu_while_training(monkeypatch):
     controller = Controller(Settings(use_gpu=True), save=lambda s: None)
     monkeypatch.setattr(controller._gpu_memory, "allowed", lambda: True)  # not this PC's card
     assert controller.gpu_allowed()
-    controller._train_proc = type("P", (), {"poll": lambda self: None})()
-    assert not controller.gpu_allowed()  # training is running
+    running = type("P", (), {"poll": lambda self: None})()
+    for kind in ("rvc", "f5-prep", "f5-train"):  # any training job
+        controller._jobs = {kind: (running, None)}
+        assert not controller.gpu_allowed()
+        assert controller.gpu_job_running
+    assert controller.training == (kind == "rvc") and controller.f5_training
+    controller._jobs = {}
+    assert controller.gpu_allowed() and not controller.gpu_job_running
     controller.settings.use_gpu = False
-    controller._train_proc = None
     assert not controller.gpu_allowed()  # the user switched the GPU off
 
 
@@ -298,3 +303,50 @@ def test_start_after_stop_while_starting_still_starts(monkeypatch):
     go_on.set()
     assert _wait(lambda: controller.vc_running)
     assert len(FakeVoiceChanger.made) == 1 and not FakeVoiceChanger.made[0].stopped
+
+
+def test_f5_jobs_report_through_the_same_runner(tmp_path, monkeypatch):
+    """A stand-in F5 preparing process: its events, its end, and an end without "done"."""
+    import subprocess
+
+    from ttslts.tts import f5_runtime
+
+    fake = tmp_path / "fake_prep.py"
+    fake.write_text(
+        "import json, sys\n"
+        "e = lambda **k: print(json.dumps(k), flush=True)\n"
+        "e(type='stage', stage='transcribe', text='Writing')\n"
+        "e(type='progress', stage='transcribe', fraction=0.5)\n"
+        "e(type='done', measured='m.json')\n"
+    )
+    real_popen = subprocess.Popen
+    monkeypatch.setattr(
+        subprocess, "Popen", lambda cmd, **kw: real_popen([sys.executable, str(fake)], **kw)
+    )
+    monkeypatch.setattr(Controller, "f5_training_ready", staticmethod(lambda: True))
+    monkeypatch.setattr(f5_runtime, "python_command", lambda base=None: [sys.executable])
+    monkeypatch.setattr(f5_runtime, "prepare_for_run", lambda base=None: {})
+    controller = Controller(Settings(), save=lambda s: None)
+    got = []
+    controller.f5PrepStage.connect(lambda t: got.append(("stage", t)))
+    controller.f5PrepProgress.connect(lambda f: got.append(("progress", f)))
+    controller.f5PrepRunning.connect(lambda r: got.append(("running", r)))
+    controller.f5PrepFinished.connect(lambda m, ok: got.append(("finished", m, ok)))
+    controller.error.connect(lambda m: got.append(("error", m)))
+    controller.start_f5_prep(["a.mp3"], "voice")
+    assert controller.gpu_job_running or got  # started (or already over)
+    controller.start_training(["a.wav"], "voice", resume=False)  # one job at a time
+    app = QApplication.instance() or QApplication([])
+    deadline = time.time() + 20
+    while ("finished", "m.json", True) not in got and time.time() < deadline:
+        app.processEvents()
+        time.sleep(0.02)
+    app.processEvents()
+    assert got == [
+        ("running", True),
+        ("stage", "Writing"),
+        ("progress", 0.5),
+        ("running", False),
+        ("finished", "m.json", True),
+    ]
+    assert not controller.gpu_job_running

@@ -7,7 +7,8 @@ Writes into the job's ``work_dir``:
   a recording that has one is not transcribed again (the step can be stopped and resumed)
 * ``wavs/NNN_SSSSS.wav`` - every usable sentence at 24 kHz, cut at its pauses
 * ``measured.json`` - all sentences with the second transcript, likeness, pitch and trembling;
-  ``f5_data.select`` chooses from it
+  ``f5_data.select`` chooses from it. A stopped run leaves it half measured (to go on from);
+  ``measured.done`` is written when every sentence is measured
 
 Events on stdout, one JSON object a line (as ``train.run``): ``stage``, ``progress``
 (``fraction`` of the whole job), ``done`` (``measured``: the file), ``stopped``, ``error``.
@@ -32,6 +33,7 @@ WHISPER = "large-v3"
 RECHECK = "mobiuslabsgmbh/faster-whisper-large-v3-turbo"
 ECAPA = "speechbrain/spkrec-ecapa-voxceleb"
 STOP_FILE = "STOP"
+MEASURED_DONE = "measured.done"
 # share of the whole job per step, for one progress bar
 SHARES = {"transcribe": 0.55, "recheck": 0.25, "measure": 0.2}
 
@@ -59,12 +61,24 @@ def _whisper(name: str, job: dict):
     if not (folder / "model.bin").exists():
         emit(type="stage", stage="download", text=f"Downloading Whisper {folder.name}…")
         download_model(name, output_dir=str(folder))
-    if job.get("device") == "cuda":
+    if job.get("device") == "cuda" and _has_cuda():
         import torch
 
         os.add_dll_directory(os.path.join(os.path.dirname(torch.__file__), "lib"))
-        return WhisperModel(str(folder), device="cuda", compute_type="float16")
+        try:
+            return WhisperModel(str(folder), device="cuda", compute_type="float16")
+        except (RuntimeError, ValueError) as exc:  # no usable CUDA for CTranslate2
+            emit(type="stage", stage="transcribe", text=f"Whisper runs on the CPU ({exc})")
     return WhisperModel(str(folder), device="cpu", compute_type="int8")
+
+
+def _has_cuda() -> bool:
+    try:
+        import torch
+
+        return torch.cuda.is_available()
+    except ImportError:
+        return False
 
 
 def _write_wav(path: Path, audio: np.ndarray, soft_end: bool) -> None:
@@ -206,9 +220,11 @@ def _pitch_tracker(job: dict):
     one value per 10 ms of 16 kHz audio, 0 where there is no voice."""
     if job.get("rmvpe_path") and Path(job["rmvpe_path"]).exists():
         from ttslts.onnx_util import make_session
-        from ttslts.vc.rmvpe_mel import RmvpeMelPitch
+        from ttslts.vc.rmvpe_mel import RmvpeMelPitch, is_mel_model
+        from ttslts.vc.rvc import RmvpePitch
 
-        return RmvpeMelPitch(make_session(job["rmvpe_path"], False))
+        session = make_session(job["rmvpe_path"], False)
+        return RmvpeMelPitch(session) if is_mel_model(session) else RmvpePitch(session)
     import librosa
 
     def pyin(x):
@@ -223,6 +239,7 @@ def run_job(job: dict) -> Path:
     work.mkdir(parents=True, exist_ok=True)
     stop_file = work / STOP_FILE
     stop_file.unlink(missing_ok=True)
+    (work / MEASURED_DONE).unlink(missing_ok=True)
 
     def stopped() -> bool:
         return stop_file.exists()
@@ -240,6 +257,7 @@ def run_job(job: dict) -> Path:
         measure(job, work, clips, stopped)
     finally:
         measured.write_text(json.dumps(clips, ensure_ascii=False), encoding="utf-8")
+    (work / MEASURED_DONE).write_text("ok", encoding="utf-8")
     return measured
 
 
